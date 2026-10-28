@@ -110,3 +110,16 @@ def test_normalization_keeps_close_and_assignment_metadata_without_contact_email
     assert normalized["title"] == "Question"
     assert normalized["admin_assignee_id"] == 12
     assert "email" not in normalized["contacts"]["contacts"][0]
+def test_source_message_is_included_when_checking_api_part_count(tmp_path):
+    from datetime import date
+    period = DateRange(date(2026, 10, 27), date(2026, 10, 28))
+    start, _ = period.epoch_bounds()
+    source = {"type": "conversation", "body": "opening message"}
+    api_detail = detail("with-source", [{"id": "p1"}, {"id": "p2"}, {"id": "p3"}], source=source)
+    client = FakeClient([candidate("with-source", start, count_conversation_parts=4)], {"with-source": api_detail})
+    result = ConversationExporter(client).run(period, tmp_path)
+    assert result["status"] == "success"
+    assert result["error_count"] == 0
+    row = json.loads((tmp_path / "2026-10-27_2026-10-28" / "conversations.jsonl").read_text(encoding="utf-8"))
+    assert row["source"]["body"] == "opening message"
+    assert len(row["conversation_parts"]) == 3

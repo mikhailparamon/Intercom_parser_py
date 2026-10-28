@@ -37,12 +37,16 @@ class ConversationExporter:
                         detail = self.client.get_conversation(str(conversation_id))
                         parts_container = detail.get("conversation_parts") or {}
                         parts = parts_container.get("conversation_parts", []) if isinstance(parts_container, dict) else []
-                        expected = max(
-                            int(candidate.get("count_conversation_parts") or (candidate.get("statistics") or {}).get("count_conversation_parts") or 0),
-                            int(parts_container.get("total_count") or 0) if isinstance(parts_container, dict) else 0,
+                        expected_parts = int(
+                            candidate.get("count_conversation_parts")
+                            or (candidate.get("statistics") or {}).get("count_conversation_parts")
+                            or 0
                         )
-                        if expected > len(parts):
-                            limitations.append(f"Обращение {conversation_id}: API вернул {len(parts)} из {expected} частей переписки.")
+                        response_part_count = int(parts_container.get("total_count") or 0) if isinstance(parts_container, dict) else 0
+                        available_count = len(parts) + (1 if detail.get("source") else 0)
+                        if expected_parts > available_count or response_part_count > len(parts):
+                            known_count = max(expected_parts, response_part_count + (1 if detail.get("source") else 0))
+                            limitations.append(f"Обращение {conversation_id}: API вернул не всю историю (доступно {available_count}, ожидается {known_count} частей).")
                             errors += 1
                         exported += 1
                         yield self._normalize(detail, parts)
