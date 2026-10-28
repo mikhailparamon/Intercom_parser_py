@@ -83,12 +83,25 @@ class IntercomClient:
         end_dt = datetime(end.year, end.month, end.day, tzinfo=timezone.utc)
         start_epoch = int(start_dt.timestamp())
         end_epoch = int(end_dt.timestamp())
+        created_before_end = {"field": "created_at", "operator": "<", "value": str(end_epoch - 1)}
         payload: dict[str, Any] = {
             "query": {
-                "operator": "AND",
+                "operator": "OR",
                 "value": [
-                    {"field": "created_at", "operator": ">", "value": str(start_epoch)},
-                    {"field": "created_at", "operator": "<", "value": str(end_epoch - 1)},
+                    {
+                        "operator": "AND",
+                        "value": [
+                            {"field": "created_at", "operator": ">", "value": str(start_epoch)},
+                            created_before_end,
+                        ],
+                    },
+                    {
+                        "operator": "AND",
+                        "value": [
+                            created_before_end,
+                            {"field": "updated_at", "operator": ">", "value": str(start_epoch)},
+                        ],
+                    },
                 ],
             },
             "pagination": {"per_page": 150},

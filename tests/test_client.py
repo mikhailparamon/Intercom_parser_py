@@ -88,11 +88,14 @@ def test_search_paginates_and_uses_creation_bounds():
     client = IntercomClient("t", "2.17", session=session, sleeper=lambda _: None)
     items = list(client.search_conversations(date(2026, 7, 1), date(2026, 10, 1)))
     assert [item["id"] for item in items] == ["1", "2"]
-    first_body = session.calls[0][2]["json"]
-    filters = first_body["query"]["value"]
-    assert filters[0]["field"] == "created_at"
-    assert filters[0]["value"] == str(1782864000)
-    assert filters[1]["value"] == str(1790812799)
+    query = session.calls[0][2]["json"]["query"]
+    assert query["operator"] == "OR"
+    creation_filters = query["value"][0]["value"]
+    assert creation_filters[0] == {"field": "created_at", "operator": ">", "value": str(1782864000)}
+    assert creation_filters[1] == {"field": "created_at", "operator": "<", "value": str(1790812799)}
+    updated_filters = query["value"][1]["value"]
+    assert updated_filters[0] == {"field": "created_at", "operator": "<", "value": str(1790812799)}
+    assert updated_filters[1] == {"field": "updated_at", "operator": ">", "value": str(1782864000)}
     assert session.calls[1][2]["json"]["pagination"]["starting_after"] == "cursor1"
 
 

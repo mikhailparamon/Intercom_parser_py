@@ -19,35 +19,64 @@ class ConversationExporter:
         found = exported = errors = 0
         started_at = datetime.now(timezone.utc).isoformat()
         limitations: list[str] = []
+        seen_ids: set[str] = set()
+
+        def in_period(timestamp) -> bool:
+            if timestamp is None:
+                return False
+            try:
+                return date_range.contains(int(timestamp))
+            except (TypeError, ValueError, OverflowError):
+                return False
 
         def records():
             nonlocal found, exported, errors
             try:
                 for candidate in self.client.search_conversations(date_range.start, date_range.end):
-                    created_at = candidate.get("created_at")
-                    if created_at is None or not date_range.contains(int(created_at)):
-                        continue
-                    found += 1
                     conversation_id = candidate.get("id")
                     if conversation_id is None:
                         errors += 1
                         limitations.append("Найдено обращение без идентификатора; его невозможно выгрузить.")
                         continue
+                    conversation_id = str(conversation_id)
+                    if conversation_id in seen_ids:
+                        continue
+                    seen_ids.add(conversation_id)
+                    candidate_matches = in_period(candidate.get("created_at")) or in_period(candidate.get("updated_at"))
+                    if candidate_matches:
+                        found += 1
                     try:
-                        detail = self.client.get_conversation(str(conversation_id))
+                        detail = self.client.get_conversation(conversation_id)
                         parts_container = detail.get("conversation_parts") or {}
                         parts = parts_container.get("conversation_parts", []) if isinstance(parts_container, dict) else []
-                        expected_parts = int(
-                            candidate.get("count_conversation_parts")
-                            or (candidate.get("statistics") or {}).get("count_conversation_parts")
-                            or 0
+                        if not isinstance(parts, list):
+                            raise ValueError("Некорректный список частей переписки")
+                        candidate_statistics = candidate.get("statistics")
+                        detail_statistics = detail.get("statistics")
+                        expected_parts = max(
+                            int(candidate.get("count_conversation_parts") or (candidate_statistics or {}).get("count_conversation_parts") or 0),
+                            int((detail_statistics or {}).get("count_conversation_parts") or 0),
                         )
                         response_part_count = int(parts_container.get("total_count") or 0) if isinstance(parts_container, dict) else 0
                         available_count = len(parts) + (1 if detail.get("source") else 0)
-                        if expected_parts > available_count or response_part_count > len(parts):
+                        truncated = expected_parts > available_count or response_part_count > len(parts)
+                        if truncated:
                             known_count = max(expected_parts, response_part_count + (1 if detail.get("source") else 0))
-                            limitations.append(f"Обращение {conversation_id}: API вернул не всю историю (доступно {available_count}, ожидается {known_count} частей).")
+                            limitations.append(f"Обращение {conversation_id}: API вернул не всю историю (доступно {available_count}, ожидается {known_count} частей); активность в периоде может быть не обнаружена.")
                             errors += 1
+
+                        part_matches = any(
+                            isinstance(part, dict) and in_period(part.get("created_at"))
+                            for part in parts
+                        )
+                        detail_matches = in_period(detail.get("created_at")) or in_period(detail.get("updated_at"))
+                        if not candidate_matches and not detail_matches and not part_matches:
+                            if truncated:
+                                limitations.append(f"Обращение {conversation_id}: невозможно проверить продолжение в периоде из-за лимита истории API.")
+                            continue
+
+                        if not candidate_matches:
+                            found += 1
                         exported += 1
                         yield self._normalize(detail, parts)
                     except Exception as exc:
