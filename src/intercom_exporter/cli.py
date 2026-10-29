@@ -6,7 +6,14 @@ from pathlib import Path
 from .client import IntercomAPIError, IntercomClient
 from .config import load_config
 from .dates import DateRange, default_range, parse_date_range
-from .exporter import ConversationExporter
+from .exporter import ConversationExporter, format_duration
+
+
+def positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("значение должно быть не меньше 1")
+    return parsed
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -14,6 +21,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--start", help="Начало периода, YYYY-MM-DD (UTC)")
     parser.add_argument("--end", help="Конец периода, YYYY-MM-DD, не включая эту дату (UTC)")
     parser.add_argument("--output", default="data", help="Корневая директория результатов (по умолчанию: data)")
+    parser.add_argument("--workers", type=positive_int, default=4, help="Максимум одновременных запросов деталей (по умолчанию: 4)")
     parser.add_argument("--dry-run", action="store_true", help="Показать период и параметры без запросов к API")
     parser.add_argument("--verbose", action="store_true", help="Подробное логирование без содержимого переписок")
     return parser
@@ -40,9 +48,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     client = IntercomClient(config.access_token, config.api_version)
     try:
-        result = ConversationExporter(client).run(date_range, args.output, api_version=config.api_version)
+        result = ConversationExporter(client, max_workers=args.workers).run(date_range, args.output, api_version=config.api_version)
     except IntercomAPIError as exc:
         logging.error("Экспорт не выполнен: %s", exc)
         return 1
-    print(f"Экспорт завершён: {result['status']}. Найдено: {result['found_count']}, успешно обработано: {result['exported_count']}, ошибок: {result['error_count']}. Каталог: {result['output_dir']}")
+    print(f"Экспорт завершён: {result['status']}. Найдено: {result['found_count']}, успешно обработано: {result['exported_count']}, ошибок: {result['error_count']}. Время: {format_duration(result['elapsed_seconds'])}. Каталог: {result['output_dir']}")
     return 0 if result["status"] == "success" else 1

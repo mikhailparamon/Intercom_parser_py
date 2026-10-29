@@ -1,4 +1,6 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
+import threading
 
 import pytest
 import requests
@@ -90,6 +92,7 @@ def test_search_paginates_and_uses_creation_bounds():
     assert [item["id"] for item in items] == ["1", "2"]
     query = session.calls[0][2]["json"]["query"]
     assert query["operator"] == "OR"
+    assert session.calls[0][2]["json"]["pagination"]["per_page"] == 150
     creation_filters = query["value"][0]["value"]
     assert creation_filters[0] == {"field": "created_at", "operator": ">", "value": str(1782864000)}
     assert creation_filters[1] == {"field": "created_at", "operator": "<", "value": str(1790812799)}
@@ -119,3 +122,29 @@ def test_retrieve_requests_plaintext_message_bodies():
     client = IntercomClient("t", "2.17", session=session)
     client.get_conversation("42")
     assert session.calls[0][2]["params"] == {"display_as": "plaintext"}
+
+
+def test_default_http_sessions_are_separate_per_worker_thread(monkeypatch):
+    created = []
+
+    class Session:
+        pass
+
+    def make_session():
+        session = Session()
+        created.append(session)
+        return session
+
+    monkeypatch.setattr("intercom_exporter.client.requests.Session", make_session)
+    client = IntercomClient("t", "2.17")
+    barrier = threading.Barrier(2)
+
+    def get_session(_):
+        barrier.wait(timeout=2)
+        return client._get_session()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        sessions = list(executor.map(get_session, range(2)))
+
+    assert sessions[0] is not sessions[1]
+    assert len(created) == 2

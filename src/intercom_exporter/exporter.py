@@ -1,4 +1,6 @@
 import logging
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -9,14 +11,25 @@ from .storage import JsonlStore
 logger = logging.getLogger(__name__)
 
 
+def format_duration(seconds: float) -> str:
+    total_seconds = max(0, int(seconds + 0.5))
+    hours, remaining = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remaining, 60)
+    return f"{hours} ч {minutes} мин {seconds} сек"
+
+
 class ConversationExporter:
-    def __init__(self, client):
+    def __init__(self, client, *, max_workers: int = 4):
+        if max_workers < 1:
+            raise ValueError("max_workers должен быть не меньше 1")
         self.client = client
+        self.max_workers = max_workers
 
     def run(self, date_range: DateRange, output_root: str | Path, *, api_version: str = "unknown") -> dict[str, Any]:
         output_dir = Path(output_root) / f"{date_range.start.isoformat()}_{date_range.end.isoformat()}"
         store = JsonlStore(output_dir / "conversations.jsonl")
         found = exported = errors = 0
+        started_monotonic = time.perf_counter()
         started_at = datetime.now(timezone.utc).isoformat()
         limitations: list[str] = []
         seen_ids: set[str] = set()
@@ -31,7 +44,10 @@ class ConversationExporter:
 
         def records():
             nonlocal found, exported, errors
-            try:
+
+            def candidate_batches():
+                nonlocal found, errors
+                batch = []
                 for candidate in self.client.search_conversations(date_range.start, date_range.end):
                     conversation_id = candidate.get("id")
                     if conversation_id is None:
@@ -45,54 +61,68 @@ class ConversationExporter:
                     candidate_matches = in_period(candidate.get("created_at")) or in_period(candidate.get("updated_at"))
                     if candidate_matches:
                         found += 1
-                    try:
-                        detail = self.client.get_conversation(conversation_id)
-                        parts_container = detail.get("conversation_parts") or {}
-                        parts = parts_container.get("conversation_parts", []) if isinstance(parts_container, dict) else []
-                        if not isinstance(parts, list):
-                            raise ValueError("Некорректный список частей переписки")
-                        candidate_statistics = candidate.get("statistics")
-                        detail_statistics = detail.get("statistics")
-                        expected_parts = max(
-                            int(candidate.get("count_conversation_parts") or (candidate_statistics or {}).get("count_conversation_parts") or 0),
-                            int((detail_statistics or {}).get("count_conversation_parts") or 0),
-                        )
-                        response_part_count = int(parts_container.get("total_count") or 0) if isinstance(parts_container, dict) else 0
-                        available_count = len(parts) + (1 if detail.get("source") else 0)
-                        truncated = expected_parts > available_count or response_part_count > len(parts)
-                        if truncated:
-                            known_count = max(expected_parts, response_part_count + (1 if detail.get("source") else 0))
-                            limitations.append(f"Обращение {conversation_id}: API вернул не всю историю (доступно {available_count}, ожидается {known_count} частей); активность в периоде может быть не обнаружена.")
-                            errors += 1
+                    batch.append((candidate, conversation_id, candidate_matches))
+                    if len(batch) == self.max_workers:
+                        yield batch
+                        batch = []
+                if batch:
+                    yield batch
 
-                        part_matches = any(
-                            isinstance(part, dict) and in_period(part.get("created_at"))
-                            for part in parts
-                        )
-                        detail_matches = in_period(detail.get("created_at")) or in_period(detail.get("updated_at"))
-                        if not candidate_matches and not detail_matches and not part_matches:
-                            if truncated:
-                                limitations.append(f"Обращение {conversation_id}: невозможно проверить продолжение в периоде из-за лимита истории API.")
-                            continue
+            try:
+                with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                    for batch in candidate_batches():
+                        futures = [executor.submit(self.client.get_conversation, item[1]) for item in batch]
+                        for (candidate, conversation_id, candidate_matches), future in zip(batch, futures):
+                            try:
+                                detail = future.result()
+                                parts_container = detail.get("conversation_parts") or {}
+                                parts = parts_container.get("conversation_parts", []) if isinstance(parts_container, dict) else []
+                                if not isinstance(parts, list):
+                                    raise ValueError("Некорректный список частей переписки")
+                                candidate_statistics = candidate.get("statistics")
+                                detail_statistics = detail.get("statistics")
+                                expected_parts = max(
+                                    int(candidate.get("count_conversation_parts") or (candidate_statistics or {}).get("count_conversation_parts") or 0),
+                                    int((detail_statistics or {}).get("count_conversation_parts") or 0),
+                                )
+                                response_part_count = int(parts_container.get("total_count") or 0) if isinstance(parts_container, dict) else 0
+                                available_count = len(parts) + (1 if detail.get("source") else 0)
+                                truncated = expected_parts > available_count or response_part_count > len(parts)
+                                if truncated:
+                                    known_count = max(expected_parts, response_part_count + (1 if detail.get("source") else 0))
+                                    limitations.append(f"Обращение {conversation_id}: API вернул не всю историю (доступно {available_count}, ожидается {known_count} частей); активность в периоде может быть не обнаружена.")
+                                    errors += 1
 
-                        if not candidate_matches:
-                            found += 1
-                        exported += 1
-                        yield self._normalize(detail, parts)
-                    except Exception as exc:
-                        errors += 1
-                        limitations.append(f"Не удалось получить полную историю одного обращения ({type(exc).__name__}).")
-                        logger.error("Не удалось получить обращение (%s)", type(exc).__name__)
+                                part_matches = any(
+                                    isinstance(part, dict) and in_period(part.get("created_at"))
+                                    for part in parts
+                                )
+                                detail_matches = in_period(detail.get("created_at")) or in_period(detail.get("updated_at"))
+                                if not candidate_matches and not detail_matches and not part_matches:
+                                    if truncated:
+                                        limitations.append(f"Обращение {conversation_id}: невозможно проверить продолжение в периоде из-за лимита истории API.")
+                                    continue
+
+                                if not candidate_matches:
+                                    found += 1
+                                exported += 1
+                                yield self._normalize(detail, parts)
+                            except Exception as exc:
+                                errors += 1
+                                limitations.append(f"Не удалось получить полную историю одного обращения ({type(exc).__name__}).")
+                                logger.error("Не удалось получить обращение (%s)", type(exc).__name__)
             except Exception as exc:
                 errors += 1
                 limitations.append(f"Получение списка обращений завершилось ошибкой: {type(exc).__name__}.")
                 logger.error("Ошибка получения списка обращений (%s)", type(exc).__name__)
 
         store.merge(records())
+        elapsed_seconds = time.perf_counter() - started_monotonic
         manifest = {
             "start": date_range.start.isoformat(),
             "end_exclusive": date_range.end.isoformat(),
             "started_at": started_at,
+            "elapsed_seconds": round(elapsed_seconds, 3),
             "api_version": api_version,
             "found_count": found,
             "exported_count": exported,
@@ -101,7 +131,7 @@ class ConversationExporter:
             "limitations": limitations,
         }
         store.write_manifest(manifest)
-        logger.info("Обращений найдено: %d; успешно выгружено: %d; ошибок: %d", found, exported, errors)
+        logger.info("Обращений найдено: %d; успешно выгружено: %d; ошибок: %d; время: %s.", found, exported, errors, format_duration(elapsed_seconds))
         return {**manifest, "output_dir": str(output_dir)}
 
     @staticmethod
@@ -166,4 +196,22 @@ class ConversationExporter:
                 ]
             normalized_parts.append(item)
         result["conversation_parts"] = normalized_parts
-        return result
+        return ConversationExporter._convert_timestamps_to_utc(result)
+
+    @staticmethod
+    def _convert_timestamps_to_utc(value: Any, field_name: str | None = None) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: ConversationExporter._convert_timestamps_to_utc(item, key)
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [ConversationExporter._convert_timestamps_to_utc(item) for item in value]
+        if (
+            field_name is not None
+            and (field_name.endswith(("_at", "_until")) or field_name == "waiting_since")
+            and isinstance(value, (int, float))
+            and not isinstance(value, bool)
+        ):
+            return datetime.fromtimestamp(value, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+        return value

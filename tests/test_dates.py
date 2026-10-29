@@ -1,13 +1,13 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
 from intercom_exporter.dates import DateRange, default_range, parse_date_range
 
 
-def test_default_range_is_previous_three_full_calendar_months():
-    result = default_range(datetime(2026, 10, 28, 12, tzinfo=timezone.utc))
-    assert result == DateRange(date(2026, 7, 1), date(2026, 10, 1))
+def test_default_range_is_last_three_calendar_months_through_today():
+    result = default_range(datetime(2026, 10, 29, 12, tzinfo=timezone.utc))
+    assert result == DateRange(date(2026, 7, 29), date(2026, 10, 30))
 
 
 def test_explicit_dates_use_inclusive_start_and_exclusive_end():
@@ -30,6 +30,14 @@ def test_end_must_be_later_than_start():
         parse_date_range("2026-01-01", "2026-01-01")
 
 
-def test_month_subtraction_handles_short_months():
-    result = default_range(datetime(2026, 5, 10, tzinfo=timezone.utc))
-    assert result == DateRange(date(2026, 2, 1), date(2026, 5, 1))
+@pytest.mark.parametrize(
+    "today,expected_start",
+    [
+        (datetime(2026, 5, 31, tzinfo=timezone.utc), date(2026, 2, 28)),
+        (datetime(2024, 5, 31, tzinfo=timezone.utc), date(2024, 2, 29)),
+        (datetime(2026, 3, 31, tzinfo=timezone.utc), date(2025, 12, 31)),
+    ],
+)
+def test_default_range_clamps_day_when_target_month_is_short(today, expected_start):
+    result = default_range(today)
+    assert result == DateRange(expected_start, today.date() + timedelta(days=1))

@@ -1,4 +1,5 @@
 import logging
+import threading
 import time
 from datetime import date, datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -20,10 +21,18 @@ class IntercomClient:
                  timeout: float = 30, sleeper=time.sleep):
         self._token = token
         self.api_version = api_version
-        self.session = session or requests.Session()
+        self.session = session
+        self._thread_local = threading.local()
         self.retries = retries
         self.timeout = timeout
         self._sleep = sleeper
+
+    def _get_session(self):
+        if self.session is not None:
+            return self.session
+        if not hasattr(self._thread_local, "session"):
+            self._thread_local.session = requests.Session()
+        return self._thread_local.session
 
     def _request(self, method: str, path: str, *, params=None, json=None) -> dict[str, Any]:
         headers = {
@@ -34,7 +43,7 @@ class IntercomClient:
         }
         for attempt in range(self.retries + 1):
             try:
-                response = self.session.request(
+                response = self._get_session().request(
                     method, f"{self.BASE_URL}{path}", headers=headers,
                     params=params, json=json, timeout=self.timeout,
                 )

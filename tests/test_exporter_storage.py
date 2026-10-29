@@ -1,8 +1,10 @@
 import json
+import threading
+import time
 from datetime import date
 
 from intercom_exporter.dates import DateRange
-from intercom_exporter.exporter import ConversationExporter
+from intercom_exporter.exporter import ConversationExporter, format_duration
 from intercom_exporter.storage import JsonlStore
 
 
@@ -32,6 +34,44 @@ def detail(cid, parts, **extra):
             "conversation_parts": {"conversation_parts": parts, "total_count": len(parts)}, **extra}
 
 
+def test_format_duration_as_hours_minutes_seconds():
+    assert format_duration(5) == "0 ч 0 мин 5 сек"
+    assert format_duration(65) == "0 ч 1 мин 5 сек"
+    assert format_duration(3600) == "1 ч 0 мин 0 сек"
+    assert format_duration(3599.6) == "1 ч 0 мин 0 сек"
+
+
+def test_export_fetches_details_concurrently_with_bounded_workers(tmp_path):
+    period = DateRange(date(2026, 7, 1), date(2026, 10, 1))
+    start, _ = period.epoch_bounds()
+
+    class SlowClient(FakeClient):
+        def __init__(self, candidates, details):
+            super().__init__(candidates, details)
+            self.lock = threading.Lock()
+            self.in_flight = 0
+            self.max_in_flight = 0
+
+        def get_conversation(self, conversation_id):
+            with self.lock:
+                self.in_flight += 1
+                self.max_in_flight = max(self.max_in_flight, self.in_flight)
+            try:
+                time.sleep(0.03)
+                return super().get_conversation(conversation_id)
+            finally:
+                with self.lock:
+                    self.in_flight -= 1
+
+    candidates = [candidate(str(index), start + index) for index in range(8)]
+    client = SlowClient(candidates, {item["id"]: detail(item["id"], []) for item in candidates})
+    ConversationExporter(client, max_workers=3).run(period, tmp_path)
+    rows = [json.loads(line) for line in (tmp_path / "2026-07-01_2026-10-01" / "conversations.jsonl").read_text(encoding="utf-8").splitlines()]
+
+    assert 1 < client.max_in_flight <= 3
+    assert [row["id"] for row in rows] == [item["id"] for item in candidates]
+
+
 def test_export_includes_created_or_updated_and_preserves_out_of_range_parts(tmp_path):
     period = DateRange(date(2026, 7, 1), date(2026, 10, 1))
     start, end = period.epoch_bounds()
@@ -48,6 +88,7 @@ def test_export_includes_created_or_updated_and_preserves_out_of_range_parts(tmp
     assert [row["id"] for row in rows] == ["updated", "start", "closed-later"]
     assert [part["id"] for part in rows[1]["conversation_parts"]] == ["before", "after"]
     assert result["exported_count"] == 3
+    assert result["elapsed_seconds"] >= 0
 
 
 def test_output_is_unicode_jsonl_and_manifest_has_no_token(tmp_path):
@@ -191,3 +232,29 @@ def test_repeated_search_candidate_is_retrieved_once(tmp_path):
     result = ConversationExporter(client).run(period, tmp_path)
     assert client.get_calls == ["same"]
     assert result["found_count"] == 1
+def test_normalization_converts_unix_times_to_utc_iso8601_recursively():
+    raw = {
+        "id": "time-test",
+        "created_at": 1793102160,
+        "updated_at": 1793102557,
+        "waiting_since": 1793222052,
+        "snoozed_until": 1793105760,
+        "statistics": {"last_close_at": 1793102557, "count_conversation_parts": 1},
+    }
+    parts = [{
+        "id": "part-1",
+        "created_at": 1793102269,
+        "updated_at": 1793102269,
+        "notified_at": 1793102270,
+        "metadata": {"created_at": 1793102271},
+    }]
+    normalized = ConversationExporter._normalize(raw, parts)
+    assert normalized["created_at"] == "2026-10-27T11:56:00Z"
+    assert normalized["updated_at"] == "2026-10-27T12:02:37Z"
+    assert normalized["waiting_since"] == "2026-10-28T21:14:12Z"
+    assert normalized["snoozed_until"] == "2026-10-27T12:56:00Z"
+    assert normalized["statistics"]["last_close_at"] == "2026-10-27T12:02:37Z"
+    assert normalized["statistics"]["count_conversation_parts"] == 1
+    assert normalized["conversation_parts"][0]["created_at"] == "2026-10-27T11:57:49Z"
+    assert normalized["conversation_parts"][0]["notified_at"] == "2026-10-27T11:57:50Z"
+    assert normalized["conversation_parts"][0]["metadata"]["created_at"] == "2026-10-27T11:57:51Z"
