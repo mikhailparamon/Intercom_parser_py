@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .dates import DateRange
-from .storage import JsonlStore
+from .storage import JsonStore
 
 logger = logging.getLogger(__name__)
 
@@ -25,17 +25,41 @@ class ConversationExporter:
         self.client = client
         self.max_workers = max_workers
 
+    @staticmethod
+    def _create_output_dir(output_root: str | Path, date_range: DateRange,
+                           started_at: datetime) -> Path:
+        root = Path(output_root)
+        root.mkdir(parents=True, exist_ok=True)
+        base_name = f"{date_range.start.isoformat()}_{date_range.end.isoformat()}"
+        output_dir = root / base_name
+        try:
+            output_dir.mkdir()
+            return output_dir
+        except FileExistsError:
+            run_stamp = started_at.strftime("%Y%m%dT%H%M%S.%fZ")
+            unique_name = f"{base_name}_run_{run_stamp}"
+            output_dir = root / unique_name
+            suffix = 1
+            while True:
+                try:
+                    output_dir.mkdir()
+                    return output_dir
+                except FileExistsError:
+                    output_dir = root / f"{unique_name}_{suffix:02d}"
+                    suffix += 1
+
     def run(self, date_range: DateRange, output_root: str | Path, *, api_version: str = "unknown",
             selection: str = "all", fields: str = "important") -> dict[str, Any]:
         if selection not in {"new", "updated", "all"}:
             raise ValueError("selection должен быть new, updated или all")
         if fields not in {"important", "all"}:
             raise ValueError("fields должен быть important или all")
-        output_dir = Path(output_root) / f"{date_range.start.isoformat()}_{date_range.end.isoformat()}"
-        store = JsonlStore(output_dir / "conversations.jsonl")
-        found = exported = errors = 0
         started_monotonic = time.perf_counter()
-        started_at = datetime.now(timezone.utc).isoformat()
+        started_at_time = datetime.now(timezone.utc)
+        output_dir = self._create_output_dir(output_root, date_range, started_at_time)
+        store = JsonStore(output_dir / "conversations.json")
+        found = exported = errors = 0
+        started_at = started_at_time.isoformat()
         limitations: list[str] = []
         seen_ids: set[str] = set()
 
@@ -173,67 +197,7 @@ class ConversationExporter:
             ]
             return ConversationExporter._convert_timestamps_to_utc(result)
 
-        result: dict[str, Any] = {}
-        for field in ("id", "type", "title", "created_at", "updated_at", "state", "open", "read", "priority",
-                      "waiting_since", "snoozed_until", "admin_assignee_id", "team_assignee_id", "tags", "custom_attributes"):
-            if field in conversation:
-                result[field] = conversation[field]
-        statistics = conversation.get("statistics")
-        if isinstance(statistics, dict):
-            result["statistics"] = {
-                key: statistics[key]
-                for key in ("last_close_at", "count_conversation_parts")
-                if key in statistics
-            }
-        source = conversation.get("source")
-        if isinstance(source, dict):
-            attachment_fields = ("name", "url", "type", "content_type", "filesize")
-            source_fields = {key: source[key] for key in ("type", "id", "delivered_as", "subject", "body", "url", "redacted") if key in source}
-            author = source.get("author")
-            if isinstance(author, dict):
-                source_fields["author"] = {key: author[key] for key in ("id", "type", "name") if key in author}
-            attachments = source.get("attachments")
-            if isinstance(attachments, list):
-                source_fields["attachments"] = [
-                    {key: attachment[key] for key in attachment_fields if key in attachment}
-                    for attachment in attachments if isinstance(attachment, dict)
-                ]
-            if source_fields:
-                result["source"] = source_fields
-        contacts = conversation.get("contacts")
-        if isinstance(contacts, dict):
-            contact_items = contacts.get("contacts")
-            if isinstance(contact_items, list):
-                result["contacts"] = {
-                    "type": contacts.get("type"),
-                    "contacts": [
-                        {key: contact[key] for key in ("id", "type") if key in contact}
-                        for contact in contact_items if isinstance(contact, dict)
-                    ],
-                }
-        normalized_parts = []
-        part_fields = (
-            "id", "part_type", "created_at", "updated_at", "notified_at", "type", "body",
-            "redacted", "assigned_to", "admin_assignee_id", "team_assignee_id", "external_id",
-            "state", "metadata", "tags", "event_details", "app_package_code", "translations",
-        )
-        attachment_fields = ("name", "url", "type", "content_type", "filesize")
-        for part in parts:
-            if not isinstance(part, dict):
-                continue
-            item = {key: part[key] for key in part_fields if key in part}
-            author = part.get("author")
-            if isinstance(author, dict):
-                item["author"] = {key: author[key] for key in ("id", "type", "name") if key in author}
-            attachments = part.get("attachments")
-            if isinstance(attachments, list):
-                item["attachments"] = [
-                    {key: attachment[key] for key in attachment_fields if key in attachment}
-                    for attachment in attachments if isinstance(attachment, dict)
-                ]
-            normalized_parts.append(item)
-        result["conversation_parts"] = normalized_parts
-        return ConversationExporter._convert_timestamps_to_utc(result)
+        return conversation
 
     @staticmethod
     def _convert_timestamps_to_utc(value: Any, field_name: str | None = None) -> Any:

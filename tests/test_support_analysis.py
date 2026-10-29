@@ -125,6 +125,31 @@ def test_prepare_creates_chatgpt_input_prompt_and_keeps_real_ids(tmp_path):
     assert "5841" not in prompt
 
 
+def test_prepare_reads_pretty_json_array_exports(tmp_path):
+    input_path = tmp_path / "conversations.json"
+    rows = sample_conversations()
+    rows[0]["conversation_parts"] = {
+        "type": "conversation_part.list",
+        "conversation_parts": [
+            {"part_type": "comment", "author": {"type": "user", "email": "person@example.com"},
+             "body": "Клиент написал пароль: secret-value"},
+            {"part_type": "comment", "author": {"type": "admin"}, "body": "Ответ оператора"},
+        ],
+        "total_count": 2,
+    }
+    input_path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    result = prepare_analysis(input_path)
+
+    payload = json.loads((tmp_path / "support-analysis" / "chatgpt_input.json").read_text(encoding="utf-8"))
+    assert result["conversation_count"] == 2
+    assert {item["id"] for item in payload["conversations"]} == {"conv-1", "conv-2"}
+    assert payload["conversations"][0]["messages"][-2:] == [
+        {"role": "customer", "part_type": "comment", "text": "Клиент написал "},
+        {"role": "operator", "part_type": "comment", "text": "Ответ оператора"},
+    ]
+
+
 def test_prepare_rejects_duplicate_or_missing_conversation_ids(tmp_path):
     path = tmp_path / "duplicate.jsonl"
     write_jsonl(path, [{"id": "same"}, {"id": "same"}])

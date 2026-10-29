@@ -1,7 +1,8 @@
 import json
 import threading
 import time
-from datetime import date
+from datetime import date, datetime, timezone
+from pathlib import Path
 
 from intercom_exporter.dates import DateRange
 from intercom_exporter.exporter import ConversationExporter, format_duration
@@ -66,7 +67,7 @@ def test_export_fetches_details_concurrently_with_bounded_workers(tmp_path):
     candidates = [candidate(str(index), start + index) for index in range(8)]
     client = SlowClient(candidates, {item["id"]: detail(item["id"], []) for item in candidates})
     ConversationExporter(client, max_workers=3).run(period, tmp_path)
-    rows = [json.loads(line) for line in (tmp_path / "2026-07-01_2026-10-01" / "conversations.jsonl").read_text(encoding="utf-8").splitlines()]
+    rows = json.loads((tmp_path / "2026-07-01_2026-10-01" / "conversations.json").read_text(encoding="utf-8"))
 
     assert 1 < client.max_in_flight <= 3
     assert [row["id"] for row in rows] == [item["id"] for item in candidates]
@@ -84,20 +85,21 @@ def test_export_includes_created_or_updated_and_preserves_out_of_range_parts(tmp
          "at-end": detail("at-end", [], created_at=end, updated_at=end + 10)},
     )
     result = ConversationExporter(client).run(period, tmp_path, fields="all")
-    rows = [json.loads(line) for line in (tmp_path / "2026-07-01_2026-10-01" / "conversations.jsonl").read_text(encoding="utf-8").splitlines()]
+    rows = json.loads((tmp_path / "2026-07-01_2026-10-01" / "conversations.json").read_text(encoding="utf-8"))
     assert [row["id"] for row in rows] == ["updated", "start", "closed-later"]
-    assert [part["id"] for part in rows[1]["conversation_parts"]] == ["before", "after"]
+    assert [part["id"] for part in rows[1]["conversation_parts"]["conversation_parts"]] == ["before", "after"]
     assert result["exported_count"] == 3
     assert result["elapsed_seconds"] >= 0
 
 
-def test_output_is_unicode_jsonl_and_manifest_has_no_token(tmp_path):
+def test_output_is_unicode_pretty_json_and_manifest_has_no_token(tmp_path):
     period = DateRange(date(2026, 7, 1), date(2026, 10, 1))
     start, _ = period.epoch_bounds()
     client = FakeClient([candidate("1", start)], {"1": detail("1", [{"body": "Привет 👋"}])})
     result = ConversationExporter(client).run(period, tmp_path, api_version="2.17")
-    path = tmp_path / "2026-07-01_2026-10-01" / "conversations.jsonl"
+    path = tmp_path / "2026-07-01_2026-10-01" / "conversations.json"
     assert "Привет" in path.read_text(encoding="utf-8")
+    assert path.read_text(encoding="utf-8").startswith("[\n")
     manifest = json.loads((tmp_path / "2026-07-01_2026-10-01" / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["api_version"] == "2.17"
     assert manifest["selection"] == "all"
@@ -116,7 +118,7 @@ def test_partial_export_keeps_success_and_marks_manifest_incomplete(tmp_path):
     assert result["error_count"] == 1
     assert "token-secret" not in manifest_text
     assert json.loads(manifest_text)["status"] == "partial"
-    assert len((tmp_path / "2026-07-01_2026-10-01" / "conversations.jsonl").read_text(encoding="utf-8").splitlines()) == 1
+    assert len(json.loads((tmp_path / "2026-07-01_2026-10-01" / "conversations.json").read_text(encoding="utf-8"))) == 1
 
 
 def test_same_period_rerun_deduplicates_and_updates_record(tmp_path):
@@ -145,7 +147,7 @@ def test_parts_limit_is_reported_as_partial(tmp_path):
 from intercom_exporter.exporter import ConversationExporter
 
 
-def test_normalization_keeps_close_and_assignment_metadata_without_contact_emails():
+def test_all_fields_normalization_preserves_unfiltered_api_fields():
     raw = {
         "id": "a", "title": "Question", "state": "closed", "open": False,
         "admin_assignee_id": 12, "team_assignee_id": 34,
@@ -156,7 +158,7 @@ def test_normalization_keeps_close_and_assignment_metadata_without_contact_email
     normalized = ConversationExporter._normalize(raw, [])
     assert normalized["title"] == "Question"
     assert normalized["admin_assignee_id"] == 12
-    assert "email" not in normalized["contacts"]["contacts"][0]
+    assert normalized["contacts"]["contacts"][0]["email"] == "private@example.com"
 def test_source_message_is_included_when_checking_api_part_count(tmp_path):
     from datetime import date
     period = DateRange(date(2026, 10, 27), date(2026, 10, 28))
@@ -167,7 +169,7 @@ def test_source_message_is_included_when_checking_api_part_count(tmp_path):
     result = ConversationExporter(client).run(period, tmp_path)
     assert result["status"] == "success"
     assert result["error_count"] == 0
-    row = json.loads((tmp_path / "2026-10-27_2026-10-28" / "conversations.jsonl").read_text(encoding="utf-8"))
+    row = json.loads((tmp_path / "2026-10-27_2026-10-28" / "conversations.json").read_text(encoding="utf-8"))[0]
     assert row["source"]["body"] == "opening message"
     assert len(row["conversation_parts"]) == 3
 
@@ -191,10 +193,10 @@ def test_export_includes_created_updated_or_continued_conversations(tmp_path):
         "unrelated": detail("unrelated", [{"id": "outside-only", "created_at": end + 10}], created_at=start - 100, updated_at=end + 200),
     }
     result = ConversationExporter(FakeClient(candidates, details)).run(period, tmp_path, fields="all")
-    rows = [json.loads(line) for line in (tmp_path / "2026-07-01_2026-10-01" / "conversations.jsonl").read_text(encoding="utf-8").splitlines()]
+    rows = json.loads((tmp_path / "2026-07-01_2026-10-01" / "conversations.json").read_text(encoding="utf-8"))
     assert {row["id"] for row in rows} == {"created", "updated", "continued"}
     continued = next(row for row in rows if row["id"] == "continued")
-    assert [part["id"] for part in continued["conversation_parts"]] == ["assignment", "later"]
+    assert [part["id"] for part in continued["conversation_parts"]["conversation_parts"]] == ["assignment", "later"]
     assert result["found_count"] == 3
 
 
@@ -208,7 +210,7 @@ def test_part_period_is_start_inclusive_and_end_exclusive(tmp_path):
         "at-end": detail("at-end", [{"id": "end", "created_at": end}], created_at=start - 1, updated_at=end + 2),
     }
     ConversationExporter(FakeClient(candidates, details)).run(period, tmp_path)
-    rows = [json.loads(line) for line in (tmp_path / "2026-07-01_2026-10-01" / "conversations.jsonl").read_text(encoding="utf-8").splitlines()]
+    rows = json.loads((tmp_path / "2026-07-01_2026-10-01" / "conversations.json").read_text(encoding="utf-8"))
     assert [row["id"] for row in rows] == ["at-start"]
 
 
@@ -257,8 +259,8 @@ def test_selection_modes_include_only_the_requested_conversation_types(tmp_path)
     }.items():
         output_root = tmp_path / selection
         ConversationExporter(FakeClient(candidates, details)).run(period, output_root, selection=selection)
-        path = output_root / "2026-07-01_2026-10-01" / "conversations.jsonl"
-        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        path = output_root / "2026-07-01_2026-10-01" / "conversations.json"
+        rows = json.loads(path.read_text(encoding="utf-8"))
         assert {row["id"] for row in rows} == expected
 
 
@@ -271,8 +273,8 @@ def test_updated_selection_includes_part_activity_even_if_updated_at_is_outside_
     ConversationExporter(FakeClient([old], {"old": old_detail})).run(
         period, tmp_path, selection="updated"
     )
-    path = tmp_path / "2026-07-01_2026-10-01" / "conversations.jsonl"
-    assert len(path.read_text(encoding="utf-8").splitlines()) == 1
+    path = tmp_path / "2026-07-01_2026-10-01" / "conversations.json"
+    assert len(json.loads(path.read_text(encoding="utf-8"))) == 1
 
 
 def test_important_fields_keep_analysis_text_and_minimal_speaker_context(tmp_path):
@@ -285,8 +287,8 @@ def test_important_fields_keep_analysis_text_and_minimal_speaker_context(tmp_pat
                  title="VPN issue", state="closed", source={"body": "Customer message", "id": "email-id"},
                  contacts={"contacts": [{"email": "private@example.com"}]})
     ConversationExporter(FakeClient([candidate("compact", start + 1)], {"compact": raw})).run(period, tmp_path)
-    path = tmp_path / "2026-07-01_2026-10-01" / "conversations.jsonl"
-    row = json.loads(path.read_text(encoding="utf-8"))
+    path = tmp_path / "2026-07-01_2026-10-01" / "conversations.json"
+    row = json.loads(path.read_text(encoding="utf-8"))[0]
     assert row == {
         "id": "compact", "title": "VPN issue", "created_at": "2026-07-01T00:00:01Z",
         "updated_at": "2026-07-01T00:00:08Z", "source": {"body": "Customer message"},
@@ -295,16 +297,38 @@ def test_important_fields_keep_analysis_text_and_minimal_speaker_context(tmp_pat
     }
 
 
-def test_export_replaces_stale_records_for_the_same_period(tmp_path):
+def test_each_export_run_uses_a_unique_folder_and_preserves_previous_data(tmp_path):
     period = DateRange(date(2026, 7, 1), date(2026, 10, 1))
     start, _ = period.epoch_bounds()
-    path = tmp_path / "2026-07-01_2026-10-01" / "conversations.jsonl"
-    JsonlStore(path).merge([{"id": "stale", "title": "from an earlier selection"}])
-    ConversationExporter(FakeClient([candidate("current", start)], {"current": detail("current", [])})).run(
-        period, tmp_path, selection="new"
+    first = ConversationExporter(FakeClient([candidate("first", start)], {"first": detail("first", [])})).run(
+        period, tmp_path
     )
-    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
-    assert [row["id"] for row in rows] == ["current"]
+    first_path = Path(first["output_dir"]) / "conversations.json"
+    first_content = first_path.read_text(encoding="utf-8")
+
+    second = ConversationExporter(FakeClient([candidate("second", start)], {"second": detail("second", [])})).run(
+        period, tmp_path
+    )
+    second_path = Path(second["output_dir"]) / "conversations.json"
+
+    assert first["output_dir"] != second["output_dir"]
+    assert json.loads(first_path.read_text(encoding="utf-8"))[0]["id"] == "first"
+    assert json.loads(second_path.read_text(encoding="utf-8"))[0]["id"] == "second"
+    assert first_path.read_text(encoding="utf-8") == first_content
+
+
+def test_unique_output_folder_adds_counter_if_timestamp_name_is_taken(tmp_path):
+    period = DateRange(date(2026, 7, 1), date(2026, 10, 1))
+    started_at = datetime(2026, 10, 29, 12, 30, 45, 123456, tzinfo=timezone.utc)
+    base_name = "2026-07-01_2026-10-01"
+    (tmp_path / base_name).mkdir()
+    timestamp_name = f"{base_name}_run_{started_at.strftime('%Y%m%dT%H%M%S.%fZ')}"
+    (tmp_path / timestamp_name).mkdir()
+
+    output_dir = ConversationExporter._create_output_dir(tmp_path, period, started_at)
+
+    assert output_dir.name == f"{timestamp_name}_01"
+    assert output_dir.is_dir()
 
 
 def test_new_selection_ignores_truncated_history_for_old_excluded_conversation(tmp_path):
@@ -318,11 +342,11 @@ def test_new_selection_ignores_truncated_history_for_old_excluded_conversation(t
     )
     assert result["status"] == "success"
     assert result["error_count"] == 0
-    path = tmp_path / "2026-07-01_2026-10-01" / "conversations.jsonl"
-    assert path.read_text(encoding="utf-8") == ""
+    path = tmp_path / "2026-07-01_2026-10-01" / "conversations.json"
+    assert json.loads(path.read_text(encoding="utf-8")) == []
 
 
-def test_normalization_converts_unix_times_to_utc_iso8601_recursively():
+def test_important_normalization_converts_unix_times_to_utc_iso8601():
     raw = {
         "id": "time-test",
         "created_at": 1793102160,
@@ -338,13 +362,50 @@ def test_normalization_converts_unix_times_to_utc_iso8601_recursively():
         "notified_at": 1793102270,
         "metadata": {"created_at": 1793102271},
     }]
-    normalized = ConversationExporter._normalize(raw, parts)
+    normalized = ConversationExporter._normalize(raw, parts, fields="important")
     assert normalized["created_at"] == "2026-10-27T11:56:00Z"
     assert normalized["updated_at"] == "2026-10-27T12:02:37Z"
-    assert normalized["waiting_since"] == "2026-10-28T21:14:12Z"
-    assert normalized["snoozed_until"] == "2026-10-27T12:56:00Z"
-    assert normalized["statistics"]["last_close_at"] == "2026-10-27T12:02:37Z"
-    assert normalized["statistics"]["count_conversation_parts"] == 1
     assert normalized["conversation_parts"][0]["created_at"] == "2026-10-27T11:57:49Z"
-    assert normalized["conversation_parts"][0]["notified_at"] == "2026-10-27T11:57:50Z"
-    assert normalized["conversation_parts"][0]["metadata"]["created_at"] == "2026-10-27T11:57:51Z"
+
+
+def test_all_fields_writes_pretty_json_and_preserves_complete_api_payload_and_unix_times(tmp_path):
+    period = DateRange(date(2026, 7, 1), date(2026, 10, 1))
+    start, _ = period.epoch_bounds()
+    raw = detail(
+        "full",
+        [{"id": "part", "created_at": start + 5, "author": {"email": "person@example.com"},
+          "new_api_field": {"enabled": True}}],
+        created_at=start + 1,
+        updated_at=start + 8,
+        custom_api_field={"nested": "kept"},
+        contacts={"contacts": [{"id": "contact", "email": "person@example.com"}]},
+    )
+    ConversationExporter(FakeClient([candidate("full", start + 1)], {"full": raw})).run(
+        period, tmp_path, fields="all"
+    )
+
+    path = tmp_path / "2026-07-01_2026-10-01" / "conversations.json"
+    text = path.read_text(encoding="utf-8")
+    rows = json.loads(text)
+    row = rows[0]
+    assert text.startswith("[\n")
+    assert row["custom_api_field"] == {"nested": "kept"}
+    assert row["contacts"]["contacts"][0]["email"] == "person@example.com"
+    assert row["created_at"] == start + 1
+    assert row["conversation_parts"]["conversation_parts"][0]["created_at"] == start + 5
+    assert row["conversation_parts"]["conversation_parts"][0]["new_api_field"] == {"enabled": True}
+
+
+def test_important_fields_use_pretty_json_array_and_keep_iso_utc_timestamps(tmp_path):
+    period = DateRange(date(2026, 7, 1), date(2026, 10, 1))
+    start, _ = period.epoch_bounds()
+    raw = detail("compact", [], created_at=start + 1, updated_at=start + 8, custom_api_field="omitted")
+    ConversationExporter(FakeClient([candidate("compact", start + 1)], {"compact": raw})).run(
+        period, tmp_path, fields="important"
+    )
+    path = tmp_path / "2026-07-01_2026-10-01" / "conversations.json"
+    text = path.read_text(encoding="utf-8")
+    row = json.loads(text)[0]
+    assert text.startswith("[\n")
+    assert row["created_at"] == "2026-07-01T00:00:01Z"
+    assert "custom_api_field" not in row

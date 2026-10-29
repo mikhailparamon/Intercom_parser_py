@@ -18,7 +18,7 @@ def positive_int(value: str) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Выгрузка обращений и истории переписок из Intercom в JSONL")
+    parser = argparse.ArgumentParser(description="Выгрузка обращений и истории переписок из Intercom в JSON")
     parser.add_argument("--start", help="Начало периода, YYYY-MM-DD (UTC)")
     parser.add_argument("--end", help="Конец периода, YYYY-MM-DD, не включая эту дату (UTC)")
     parser.add_argument("--output", default="data", help="Корневая директория результатов (по умолчанию: data)")
@@ -27,7 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Тип обращений: новые, обновлённые старые или все (по умолчанию: all)")
     parser.add_argument("--fields", choices=("important", "all"), default="important",
                         help="Объём полей: компактный или полный (по умолчанию: important)")
-    parser.add_argument("--dry-run", action="store_true", help="Показать период и параметры без запросов к API")
+    parser.add_argument("--dry-run", action="store_true", help="Показать период и базовое имя каталога без запросов к API")
     parser.add_argument("--skip-analysis", action="store_true",
                         help="Не подготавливать файлы для ChatGPT после успешного экспорта")
     parser.add_argument("--verbose", action="store_true", help="Подробное логирование без содержимого переписок")
@@ -46,7 +46,8 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         parser.error(str(exc))
     if args.dry_run:
-        print(f"Период UTC: [{date_range.start}, {date_range.end}); отбор: {args.selection}; поля: {args.fields}; каталог: {Path(args.output) / f'{date_range.start}_{date_range.end}'}")
+        base_output_dir = Path(args.output) / f"{date_range.start}_{date_range.end}"
+        print(f"Период UTC: [{date_range.start}, {date_range.end}); отбор: {args.selection}; поля: {args.fields}; базовый каталог: {base_output_dir} (если он занят, будет создан каталог с суффиксом)")
         return 0
     try:
         config = load_config()
@@ -66,7 +67,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.skip_analysis and result["exported_count"] > 0:
         if result["status"] != "success":
             print(f"Предупреждение: экспорт частичный; анализ будет подготовлен по {result['exported_count']} выгруженным обращениям.")
-        input_path = Path(result["output_dir"]) / "conversations.jsonl"
+        input_path = Path(result["output_dir"]) / "conversations.json"
         print("Подготовка данных для ChatGPT...")
         try:
             analysis = prepare_analysis(input_path)

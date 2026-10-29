@@ -84,7 +84,7 @@ def test_cli_prepares_analysis_for_fresh_successful_export(tmp_path, monkeypatch
 
     assert cli.main(["--start", "2026-07-01", "--end", "2026-10-01", "--output", str(tmp_path)]) == 0
 
-    assert calls == [output_dir / "conversations.jsonl"]
+    assert calls == [output_dir / "conversations.json"]
     assert "Подготовка данных для ChatGPT" in capsys.readouterr().out
 
 
@@ -112,7 +112,7 @@ def test_cli_analyzes_exported_rows_from_partial_export_and_allows_opt_out(tmp_p
     ))
 
     assert cli.main(["--start", "2026-07-01", "--end", "2026-10-01", "--output", str(tmp_path)]) == 1
-    assert calls == [output_dir / "conversations.jsonl"]
+    assert calls == [output_dir / "conversations.json"]
     partial_output = capsys.readouterr().out.lower()
     assert "подготовка данных для chatgpt" in partial_output
     assert "экспорт частичный" in partial_output

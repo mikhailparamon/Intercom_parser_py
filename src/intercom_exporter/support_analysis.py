@@ -74,25 +74,45 @@ def _read_conversations(path: str | Path) -> list[dict[str, Any]]:
         raise AnalysisError(f"Файл выгрузки не найден: {input_path}")
     rows: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
+
+    def append_row(row: Any, location: str) -> None:
+        if not isinstance(row, dict):
+            raise AnalysisError(f"В {location} ожидался объект обращения")
+        raw_id = row.get("id")
+        if raw_id is None or not str(raw_id).strip():
+            raise AnalysisError(f"В {location} нет ID обращения")
+        conversation_id = str(raw_id)
+        if conversation_id in seen_ids:
+            raise AnalysisError(f"В выгрузке повторяющийся ID обращения: {conversation_id}")
+        seen_ids.add(conversation_id)
+        rows.append(row)
+
     try:
         with input_path.open("r", encoding="utf-8-sig") as source:
-            for line_number, line in enumerate(source, start=1):
-                if not line.strip():
-                    continue
+            first_character = ""
+            while character := source.read(1):
+                if not character.isspace():
+                    first_character = character
+                    break
+            source.seek(0)
+            if first_character == "[":
                 try:
-                    row = json.loads(line)
+                    document = json.load(source)
                 except json.JSONDecodeError as exc:
-                    raise AnalysisError(f"Некорректный JSON в строке {line_number}") from exc
-                if not isinstance(row, dict):
-                    raise AnalysisError(f"В строке {line_number} ожидался объект обращения")
-                raw_id = row.get("id")
-                if raw_id is None or not str(raw_id).strip():
-                    raise AnalysisError(f"В строке {line_number} нет ID обращения")
-                conversation_id = str(raw_id)
-                if conversation_id in seen_ids:
-                    raise AnalysisError(f"В выгрузке повторяющийся ID обращения: {conversation_id}")
-                seen_ids.add(conversation_id)
-                rows.append(row)
+                    raise AnalysisError("Некорректный JSON-массив обращений") from exc
+                if not isinstance(document, list):
+                    raise AnalysisError("Ожидался JSON-массив обращений")
+                for index, row in enumerate(document, start=1):
+                    append_row(row, f"обращении с индексом {index}")
+            else:
+                for line_number, line in enumerate(source, start=1):
+                    if not line.strip():
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError as exc:
+                        raise AnalysisError(f"Некорректный JSON в строке {line_number}") from exc
+                    append_row(row, f"строке {line_number}")
     except OSError as exc:
         raise AnalysisError(f"Не удалось прочитать файл выгрузки: {input_path}") from exc
     if not rows:
@@ -115,6 +135,8 @@ def _build_payload(rows: list[dict[str, Any]]) -> dict[str, Any]:
             if clean.strip():
                 messages.append({"role": "customer", "part_type": "source", "text": clean})
         parts = row.get("conversation_parts")
+        if isinstance(parts, dict):
+            parts = parts.get("conversation_parts")
         if isinstance(parts, list):
             for part in parts:
                 if not isinstance(part, dict):
@@ -390,10 +412,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Подготовка и проверка крупного анализа обращений через ChatGPT")
     subparsers = parser.add_subparsers(dest="command", required=True)
     prepare = subparsers.add_parser("prepare", help="Очистить и подготовить набор для ChatGPT")
-    prepare.add_argument("--input", required=True, help="Исходный conversations.jsonl")
+    prepare.add_argument("--input", required=True, help="Исходный conversations.json или conversations.jsonl")
     prepare.add_argument("--output", help="Каталог анализа (по умолчанию: support-analysis рядом с входным файлом)")
     report = subparsers.add_parser("report", help="Проверить классификации ChatGPT и построить отчёт")
-    report.add_argument("--input", required=True, help="Исходный conversations.jsonl")
+    report.add_argument("--input", required=True, help="Исходный conversations.json или conversations.jsonl")
     report.add_argument("--result", required=True, help="JSON-результат ChatGPT")
     report.add_argument("--output", help="Каталог отчёта (по умолчанию: support-analysis рядом с входным файлом)")
     return parser
