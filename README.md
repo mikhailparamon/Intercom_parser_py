@@ -29,6 +29,62 @@ python -m pip install -r requirements.txt
 copy .env.example .env
 ```
 
+## Установка (Linux)
+
+Нужен Python 3.11 или новее и Git. Для Debian/Ubuntu установите системные пакеты:
+
+```bash
+sudo apt update
+sudo apt install -y git python3 python3-venv python3-pip
+python3 --version
+```
+
+Если `python3 --version` показывает версию ниже 3.11, установите Python 3.11+ средствами своего дистрибутива и далее указывайте соответствующую команду, например `python3.11`.
+
+Перейдите в каталог проекта, создайте виртуальное окружение и установите зависимости:
+
+```bash
+cd intercom-conversation-exporter
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+cp .env.example .env
+```
+
+Команды активации подходят для Bash и Zsh. Чтобы выйти из окружения, выполните `deactivate`.
+
+## Установка (macOS)
+
+Проверьте, что установлен Python 3.11+ и Git. Если их нет, установите Homebrew с [официального сайта](https://brew.sh/), затем выполните:
+
+```bash
+brew install python@3.11 git
+python3.11 --version
+```
+
+Сначала клонируйте репозиторий по его URL или распакуйте архив проекта. Команды ниже выполняйте из корневого каталога `intercom-conversation-exporter`.
+
+Создайте виртуальное окружение, установите зависимости и скопируйте шаблон настроек:
+
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+cp .env.example .env
+```
+
+Для выхода из виртуального окружения выполните `deactivate`.
+
+## Настройка `.env` на Linux и macOS
+
+Заполните `.env` по разделу «Настройка Intercom» ниже. Перед реальной выгрузкой проверьте параметры без обращения к API:
+
+```bash
+python main.py --dry-run
+```
+
 ## Настройка Intercom
 
 Создайте private app в Intercom Developer Hub и возьмите access token в Configure → Authentication. Для этого инструмента используйте токен только своего рабочего пространства; не публикуйте его и не передавайте третьим лицам. Подробности есть в [официальной документации Intercom по авторизации](https://developers.intercom.com/docs/build-an-integration/learn-more/authentication).
