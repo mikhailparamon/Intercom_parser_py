@@ -33,10 +33,18 @@ def test_dry_run_needs_no_token_and_makes_no_api_calls(capsys):
 
 def test_dry_run_shows_explicit_selection_and_fields(capsys):
     assert main(["--dry-run", "--start", "2026-07-01", "--end", "2026-10-01",
-                 "--selection", "updated", "--fields", "all"]) == 0
+                 "--selection", "updated", "--fields", "all", "--timezone", "Europe/Moscow"]) == 0
     output = capsys.readouterr().out
     assert "updated" in output
     assert "all" in output
+    assert "Europe/Moscow" in output
+
+
+def test_cli_rejects_unknown_timezone(capsys):
+    with pytest.raises(SystemExit) as error:
+        main(["--dry-run", "--timezone", "Not/A_Timezone"])
+    assert error.value.code == 2
+    assert "Неизвестный часовой пояс" in capsys.readouterr().err
 
 
 def test_cli_rejects_unknown_selection_or_fields():

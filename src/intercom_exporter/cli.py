@@ -6,7 +6,7 @@ from pathlib import Path
 from .client import IntercomAPIError, IntercomClient
 from .config import load_config
 from .dates import DateRange, default_range, parse_date_range
-from .exporter import ConversationExporter, format_duration
+from .exporter import ConversationExporter, format_duration, resolve_timezone
 from .support_analysis import AnalysisError, prepare_analysis
 
 
@@ -15,6 +15,18 @@ def positive_int(value: str) -> int:
     if parsed < 1:
         raise argparse.ArgumentTypeError("значение должно быть не меньше 1")
     return parsed
+
+
+def valid_timezone(value: str) -> str:
+    try:
+        resolve_timezone(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+    if value.casefold() == "unix":
+        return "unix"
+    if value.casefold() == "utc":
+        return "UTC"
+    return value
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -27,6 +39,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Тип обращений: новые, обновлённые старые или все (по умолчанию: all)")
     parser.add_argument("--fields", choices=("important", "all"), default="important",
                         help="Объём полей: компактный или полный (по умолчанию: important)")
+    parser.add_argument("--timezone", type=valid_timezone, default="UTC",
+                        help="Часовой пояс временных полей: UTC, IANA (например Europe/Moscow) или unix")
     parser.add_argument("--dry-run", action="store_true", help="Показать период и базовое имя каталога без запросов к API")
     parser.add_argument("--skip-analysis", action="store_true",
                         help="Не подготавливать файлы для ChatGPT после успешного экспорта")
@@ -47,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(str(exc))
     if args.dry_run:
         base_output_dir = Path(args.output) / f"{date_range.start}_{date_range.end}"
-        print(f"Период UTC: [{date_range.start}, {date_range.end}); отбор: {args.selection}; поля: {args.fields}; базовый каталог: {base_output_dir} (если он занят, будет создан каталог с суффиксом)")
+        print(f"Период UTC: [{date_range.start}, {date_range.end}); отбор: {args.selection}; поля: {args.fields}; время: {args.timezone}; базовый каталог: {base_output_dir} (если он занят, будет создан каталог с суффиксом)")
         return 0
     try:
         config = load_config()
@@ -58,7 +72,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         result = ConversationExporter(client, max_workers=args.workers).run(
             date_range, args.output, api_version=config.api_version,
-            selection=args.selection, fields=args.fields,
+            selection=args.selection, fields=args.fields, timezone_name=args.timezone,
         )
     except IntercomAPIError as exc:
         logging.error("Экспорт не выполнен: %s", exc)

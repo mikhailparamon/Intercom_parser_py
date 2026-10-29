@@ -381,7 +381,7 @@ def test_all_fields_writes_pretty_json_and_preserves_complete_api_payload_and_un
         contacts={"contacts": [{"id": "contact", "email": "person@example.com"}]},
     )
     ConversationExporter(FakeClient([candidate("full", start + 1)], {"full": raw})).run(
-        period, tmp_path, fields="all"
+        period, tmp_path, fields="all", timezone_name="unix"
     )
 
     path = tmp_path / "2026-07-01_2026-10-01" / "conversations.json"
@@ -394,6 +394,45 @@ def test_all_fields_writes_pretty_json_and_preserves_complete_api_payload_and_un
     assert row["created_at"] == start + 1
     assert row["conversation_parts"]["conversation_parts"][0]["created_at"] == start + 5
     assert row["conversation_parts"]["conversation_parts"][0]["new_api_field"] == {"enabled": True}
+
+
+def test_all_fields_defaults_to_utc_and_supports_named_timezones(tmp_path):
+    period = DateRange(date(2026, 7, 1), date(2026, 11, 1))
+    timestamp = 1793102160
+    raw = detail("time", [], created_at=timestamp, updated_at=timestamp)
+
+    default_result = ConversationExporter(FakeClient([candidate("time", timestamp)], {"time": raw})).run(
+        period, tmp_path
+    )
+    utc_row = json.loads((Path(default_result["output_dir"]) / "conversations.json").read_text(encoding="utf-8"))[0]
+
+    moscow_result = ConversationExporter(FakeClient([candidate("time", timestamp)], {"time": raw})).run(
+        period, tmp_path, fields="all", timezone_name="Europe/Moscow"
+    )
+    moscow_row = json.loads((Path(moscow_result["output_dir"]) / "conversations.json").read_text(encoding="utf-8"))[0]
+    los_angeles_result = ConversationExporter(FakeClient([candidate("time", timestamp)], {"time": raw})).run(
+        period, tmp_path, fields="all", timezone_name="America/Los_Angeles"
+    )
+    los_angeles_row = json.loads((Path(los_angeles_result["output_dir"]) / "conversations.json").read_text(encoding="utf-8"))[0]
+
+    assert utc_row["created_at"] == "2026-10-27T11:56:00Z"
+    assert moscow_row["created_at"] == "2026-10-27T14:56:00+03:00"
+    assert los_angeles_row["created_at"] == "2026-10-27T04:56:00-07:00"
+    assert moscow_result["timezone"] == "Europe/Moscow"
+
+
+def test_unix_timezone_option_keeps_numeric_timestamps_for_important_fields(tmp_path):
+    period = DateRange(date(2026, 7, 1), date(2026, 11, 1))
+    timestamp = 1793102160
+    raw = detail("time", [], created_at=timestamp, updated_at=timestamp)
+    result = ConversationExporter(FakeClient([candidate("time", timestamp)], {"time": raw})).run(
+        period, tmp_path, fields="important", timezone_name="unix"
+    )
+
+    row = json.loads((Path(result["output_dir"]) / "conversations.json").read_text(encoding="utf-8"))[0]
+
+    assert row["created_at"] == timestamp
+    assert result["timezone"] == "unix"
 
 
 def test_important_fields_use_pretty_json_array_and_keep_iso_utc_timestamps(tmp_path):

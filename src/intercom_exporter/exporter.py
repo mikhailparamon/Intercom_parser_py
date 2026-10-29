@@ -4,11 +4,24 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .dates import DateRange
 from .storage import JsonStore
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_timezone(timezone_name: str):
+    normalized = timezone_name.strip()
+    if normalized.casefold() == "unix":
+        return None
+    if normalized.casefold() == "utc":
+        return timezone.utc
+    try:
+        return ZoneInfo(normalized)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValueError(f"Неизвестный часовой пояс: {timezone_name}") from exc
 
 
 def format_duration(seconds: float) -> str:
@@ -49,11 +62,13 @@ class ConversationExporter:
                     suffix += 1
 
     def run(self, date_range: DateRange, output_root: str | Path, *, api_version: str = "unknown",
-            selection: str = "all", fields: str = "important") -> dict[str, Any]:
+            selection: str = "all", fields: str = "important", timezone_name: str = "UTC") -> dict[str, Any]:
         if selection not in {"new", "updated", "all"}:
             raise ValueError("selection должен быть new, updated или all")
         if fields not in {"important", "all"}:
             raise ValueError("fields должен быть important или all")
+        target_timezone = resolve_timezone(timezone_name)
+        timezone_label = "unix" if target_timezone is None else timezone_name
         started_monotonic = time.perf_counter()
         started_at_time = datetime.now(timezone.utc)
         output_dir = self._create_output_dir(output_root, date_range, started_at_time)
@@ -146,7 +161,8 @@ class ConversationExporter:
 
                                 found += 1
                                 exported += 1
-                                yield self._normalize(detail, parts, fields=fields)
+                                yield self._normalize(detail, parts, fields=fields,
+                                                      target_timezone=target_timezone)
                             except Exception as exc:
                                 errors += 1
                                 limitations.append(f"Не удалось получить полную историю одного обращения ({type(exc).__name__}).")
@@ -166,6 +182,7 @@ class ConversationExporter:
             "api_version": api_version,
             "selection": selection,
             "fields": fields,
+            "timezone": timezone_label,
             "found_count": found,
             "exported_count": exported,
             "error_count": errors,
@@ -177,7 +194,8 @@ class ConversationExporter:
         return {**manifest, "output_dir": str(output_dir)}
 
     @staticmethod
-    def _normalize(conversation: dict, parts: list, *, fields: str = "all") -> dict:
+    def _normalize(conversation: dict, parts: list, *, fields: str = "all",
+                   target_timezone: Any = timezone.utc) -> dict:
         if fields == "important":
             result = {
                 key: conversation[key]
@@ -195,24 +213,30 @@ class ConversationExporter:
                 }
                 for part in parts if isinstance(part, dict)
             ]
-            return ConversationExporter._convert_timestamps_to_utc(result)
+            return ConversationExporter._convert_timestamps(result, target_timezone)
 
-        return conversation
+        return ConversationExporter._convert_timestamps(conversation, target_timezone)
 
     @staticmethod
-    def _convert_timestamps_to_utc(value: Any, field_name: str | None = None) -> Any:
+    def _convert_timestamps(value: Any, target_timezone: Any,
+                            field_name: str | None = None) -> Any:
         if isinstance(value, dict):
             return {
-                key: ConversationExporter._convert_timestamps_to_utc(item, key)
+                key: ConversationExporter._convert_timestamps(item, target_timezone, key)
                 for key, item in value.items()
             }
         if isinstance(value, list):
-            return [ConversationExporter._convert_timestamps_to_utc(item) for item in value]
+            return [ConversationExporter._convert_timestamps(item, target_timezone) for item in value]
         if (
-            field_name is not None
+            target_timezone is not None
+            and field_name is not None
             and (field_name.endswith(("_at", "_until")) or field_name == "waiting_since")
             and isinstance(value, (int, float))
             and not isinstance(value, bool)
         ):
-            return datetime.fromtimestamp(value, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+            converted = datetime.fromtimestamp(value, timezone.utc).astimezone(target_timezone)
+            rendered = converted.isoformat(timespec="seconds")
+            if converted.utcoffset() == timezone.utc.utcoffset(converted):
+                return rendered.replace("+00:00", "Z")
+            return rendered
         return value
