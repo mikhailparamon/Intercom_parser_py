@@ -19,7 +19,7 @@ def format_duration(seconds: float) -> str:
 
 
 class ConversationExporter:
-    def __init__(self, client, *, max_workers: int = 4):
+    def __init__(self, client, *, max_workers: int = 15):
         if max_workers < 1:
             raise ValueError("max_workers должен быть не меньше 1")
         self.client = client

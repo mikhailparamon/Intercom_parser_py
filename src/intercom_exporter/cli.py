@@ -22,7 +22,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--start", help="Начало периода, YYYY-MM-DD (UTC)")
     parser.add_argument("--end", help="Конец периода, YYYY-MM-DD, не включая эту дату (UTC)")
     parser.add_argument("--output", default="data", help="Корневая директория результатов (по умолчанию: data)")
-    parser.add_argument("--workers", type=positive_int, default=4, help="Максимум одновременных запросов деталей (по умолчанию: 4)")
+    parser.add_argument("--workers", type=positive_int, default=15, help="Максимум одновременных запросов деталей (по умолчанию: 15)")
     parser.add_argument("--selection", choices=("new", "updated", "all"), default="all",
                         help="Тип обращений: новые, обновлённые старые или все (по умолчанию: all)")
     parser.add_argument("--fields", choices=("important", "all"), default="important",
