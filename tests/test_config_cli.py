@@ -24,7 +24,27 @@ def test_config_missing_token_has_setup_guidance(tmp_path, monkeypatch):
 
 def test_dry_run_needs_no_token_and_makes_no_api_calls(capsys):
     assert main(["--dry-run", "--start", "2026-07-01", "--end", "2026-10-01", "--workers", "6"]) == 0
-    assert "2026-07-01" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "2026-07-01" in output
+    assert "all" in output
+    assert "important" in output
+
+
+def test_dry_run_shows_explicit_selection_and_fields(capsys):
+    assert main(["--dry-run", "--start", "2026-07-01", "--end", "2026-10-01",
+                 "--selection", "updated", "--fields", "all"]) == 0
+    output = capsys.readouterr().out
+    assert "updated" in output
+    assert "all" in output
+
+
+def test_cli_rejects_unknown_selection_or_fields():
+    with pytest.raises(SystemExit) as selection_error:
+        main(["--dry-run", "--selection", "recent"])
+    assert selection_error.value.code == 2
+    with pytest.raises(SystemExit) as fields_error:
+        main(["--dry-run", "--fields", "minimal"])
+    assert fields_error.value.code == 2
 
 
 def test_cli_rejects_nonpositive_worker_count():

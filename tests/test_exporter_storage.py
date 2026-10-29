@@ -83,7 +83,7 @@ def test_export_includes_created_or_updated_and_preserves_out_of_range_parts(tmp
          "closed-later": detail("closed-later", []),
          "at-end": detail("at-end", [], created_at=end, updated_at=end + 10)},
     )
-    result = ConversationExporter(client).run(period, tmp_path)
+    result = ConversationExporter(client).run(period, tmp_path, fields="all")
     rows = [json.loads(line) for line in (tmp_path / "2026-07-01_2026-10-01" / "conversations.jsonl").read_text(encoding="utf-8").splitlines()]
     assert [row["id"] for row in rows] == ["updated", "start", "closed-later"]
     assert [part["id"] for part in rows[1]["conversation_parts"]] == ["before", "after"]
@@ -100,6 +100,8 @@ def test_output_is_unicode_jsonl_and_manifest_has_no_token(tmp_path):
     assert "Привет" in path.read_text(encoding="utf-8")
     manifest = json.loads((tmp_path / "2026-07-01_2026-10-01" / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["api_version"] == "2.17"
+    assert manifest["selection"] == "all"
+    assert manifest["fields"] == "important"
     assert manifest["status"] == "success"
     assert result["error_count"] == 0
 
@@ -188,7 +190,7 @@ def test_export_includes_created_updated_or_continued_conversations(tmp_path):
         ], created_at=start - 100, updated_at=end + 100),
         "unrelated": detail("unrelated", [{"id": "outside-only", "created_at": end + 10}], created_at=start - 100, updated_at=end + 200),
     }
-    result = ConversationExporter(FakeClient(candidates, details)).run(period, tmp_path)
+    result = ConversationExporter(FakeClient(candidates, details)).run(period, tmp_path, fields="all")
     rows = [json.loads(line) for line in (tmp_path / "2026-07-01_2026-10-01" / "conversations.jsonl").read_text(encoding="utf-8").splitlines()]
     assert {row["id"] for row in rows} == {"created", "updated", "continued"}
     continued = next(row for row in rows if row["id"] == "continued")
@@ -232,6 +234,94 @@ def test_repeated_search_candidate_is_retrieved_once(tmp_path):
     result = ConversationExporter(client).run(period, tmp_path)
     assert client.get_calls == ["same"]
     assert result["found_count"] == 1
+
+
+def test_selection_modes_include_only_the_requested_conversation_types(tmp_path):
+    period = DateRange(date(2026, 7, 1), date(2026, 10, 1))
+    start, _ = period.epoch_bounds()
+    candidates = [
+        candidate("new", start + 1),
+        candidate("updated", start - 1, updated_at=start + 2),
+        candidate("continued", start - 1, updated_at=start + 20),
+    ]
+    details = {
+        "new": detail("new", [], created_at=start + 1, updated_at=start + 3),
+        "updated": detail("updated", [], created_at=start - 1, updated_at=start + 2),
+        "continued": detail("continued", [{"part_type": "assignment", "created_at": start + 4}],
+                            created_at=start - 1, updated_at=start + 20),
+    }
+    for selection, expected in {
+        "new": {"new"},
+        "updated": {"updated", "continued"},
+        "all": {"new", "updated", "continued"},
+    }.items():
+        output_root = tmp_path / selection
+        ConversationExporter(FakeClient(candidates, details)).run(period, output_root, selection=selection)
+        path = output_root / "2026-07-01_2026-10-01" / "conversations.jsonl"
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        assert {row["id"] for row in rows} == expected
+
+
+def test_updated_selection_includes_part_activity_even_if_updated_at_is_outside_period(tmp_path):
+    period = DateRange(date(2026, 7, 1), date(2026, 10, 1))
+    start, end = period.epoch_bounds()
+    old = candidate("old", start - 10, updated_at=end + 10)
+    old_detail = detail("old", [{"part_type": "comment", "created_at": start + 5}],
+                        created_at=start - 10, updated_at=end + 10)
+    ConversationExporter(FakeClient([old], {"old": old_detail})).run(
+        period, tmp_path, selection="updated"
+    )
+    path = tmp_path / "2026-07-01_2026-10-01" / "conversations.jsonl"
+    assert len(path.read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_important_fields_keep_analysis_text_and_minimal_speaker_context(tmp_path):
+    period = DateRange(date(2026, 7, 1), date(2026, 10, 1))
+    start, _ = period.epoch_bounds()
+    raw = detail("compact", [{"id": "part-id", "part_type": "comment", "created_at": start + 5,
+                              "body": "Operator reply", "author": {"id": "private-id", "type": "admin", "name": "Name"},
+                              "metadata": {"secret": "omit"}}],
+                 created_at=start + 1, updated_at=start + 8,
+                 title="VPN issue", state="closed", source={"body": "Customer message", "id": "email-id"},
+                 contacts={"contacts": [{"email": "private@example.com"}]})
+    ConversationExporter(FakeClient([candidate("compact", start + 1)], {"compact": raw})).run(period, tmp_path)
+    path = tmp_path / "2026-07-01_2026-10-01" / "conversations.jsonl"
+    row = json.loads(path.read_text(encoding="utf-8"))
+    assert row == {
+        "id": "compact", "title": "VPN issue", "created_at": "2026-07-01T00:00:01Z",
+        "updated_at": "2026-07-01T00:00:08Z", "source": {"body": "Customer message"},
+        "conversation_parts": [{"part_type": "comment", "created_at": "2026-07-01T00:00:05Z",
+                                 "body": "Operator reply", "author": {"type": "admin"}}],
+    }
+
+
+def test_export_replaces_stale_records_for_the_same_period(tmp_path):
+    period = DateRange(date(2026, 7, 1), date(2026, 10, 1))
+    start, _ = period.epoch_bounds()
+    path = tmp_path / "2026-07-01_2026-10-01" / "conversations.jsonl"
+    JsonlStore(path).merge([{"id": "stale", "title": "from an earlier selection"}])
+    ConversationExporter(FakeClient([candidate("current", start)], {"current": detail("current", [])})).run(
+        period, tmp_path, selection="new"
+    )
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    assert [row["id"] for row in rows] == ["current"]
+
+
+def test_new_selection_ignores_truncated_history_for_old_excluded_conversation(tmp_path):
+    period = DateRange(date(2026, 7, 1), date(2026, 10, 1))
+    start, _ = period.epoch_bounds()
+    old_candidate = candidate("old", start - 10, updated_at=start + 1, count_conversation_parts=501)
+    old_detail = detail("old", [{"created_at": start + 1} for _ in range(500)],
+                        created_at=start - 10, updated_at=start + 1)
+    result = ConversationExporter(FakeClient([old_candidate], {"old": old_detail})).run(
+        period, tmp_path, selection="new"
+    )
+    assert result["status"] == "success"
+    assert result["error_count"] == 0
+    path = tmp_path / "2026-07-01_2026-10-01" / "conversations.jsonl"
+    assert path.read_text(encoding="utf-8") == ""
+
+
 def test_normalization_converts_unix_times_to_utc_iso8601_recursively():
     raw = {
         "id": "time-test",

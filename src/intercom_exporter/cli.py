@@ -22,6 +22,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--end", help="Конец периода, YYYY-MM-DD, не включая эту дату (UTC)")
     parser.add_argument("--output", default="data", help="Корневая директория результатов (по умолчанию: data)")
     parser.add_argument("--workers", type=positive_int, default=4, help="Максимум одновременных запросов деталей (по умолчанию: 4)")
+    parser.add_argument("--selection", choices=("new", "updated", "all"), default="all",
+                        help="Тип обращений: новые, обновлённые старые или все (по умолчанию: all)")
+    parser.add_argument("--fields", choices=("important", "all"), default="important",
+                        help="Объём полей: компактный или полный (по умолчанию: important)")
     parser.add_argument("--dry-run", action="store_true", help="Показать период и параметры без запросов к API")
     parser.add_argument("--verbose", action="store_true", help="Подробное логирование без содержимого переписок")
     return parser
@@ -39,7 +43,7 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         parser.error(str(exc))
     if args.dry_run:
-        print(f"Период UTC: [{date_range.start}, {date_range.end}); каталог: {Path(args.output) / f'{date_range.start}_{date_range.end}'}")
+        print(f"Период UTC: [{date_range.start}, {date_range.end}); отбор: {args.selection}; поля: {args.fields}; каталог: {Path(args.output) / f'{date_range.start}_{date_range.end}'}")
         return 0
     try:
         config = load_config()
@@ -48,7 +52,10 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     client = IntercomClient(config.access_token, config.api_version)
     try:
-        result = ConversationExporter(client, max_workers=args.workers).run(date_range, args.output, api_version=config.api_version)
+        result = ConversationExporter(client, max_workers=args.workers).run(
+            date_range, args.output, api_version=config.api_version,
+            selection=args.selection, fields=args.fields,
+        )
     except IntercomAPIError as exc:
         logging.error("Экспорт не выполнен: %s", exc)
         return 1

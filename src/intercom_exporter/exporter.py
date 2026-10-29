@@ -25,7 +25,12 @@ class ConversationExporter:
         self.client = client
         self.max_workers = max_workers
 
-    def run(self, date_range: DateRange, output_root: str | Path, *, api_version: str = "unknown") -> dict[str, Any]:
+    def run(self, date_range: DateRange, output_root: str | Path, *, api_version: str = "unknown",
+            selection: str = "all", fields: str = "important") -> dict[str, Any]:
+        if selection not in {"new", "updated", "all"}:
+            raise ValueError("selection должен быть new, updated или all")
+        if fields not in {"important", "all"}:
+            raise ValueError("fields должен быть important или all")
         output_dir = Path(output_root) / f"{date_range.start.isoformat()}_{date_range.end.isoformat()}"
         store = JsonlStore(output_dir / "conversations.jsonl")
         found = exported = errors = 0
@@ -58,10 +63,7 @@ class ConversationExporter:
                     if conversation_id in seen_ids:
                         continue
                     seen_ids.add(conversation_id)
-                    candidate_matches = in_period(candidate.get("created_at")) or in_period(candidate.get("updated_at"))
-                    if candidate_matches:
-                        found += 1
-                    batch.append((candidate, conversation_id, candidate_matches))
+                    batch.append((candidate, conversation_id))
                     if len(batch) == self.max_workers:
                         yield batch
                         batch = []
@@ -72,7 +74,7 @@ class ConversationExporter:
                 with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
                     for batch in candidate_batches():
                         futures = [executor.submit(self.client.get_conversation, item[1]) for item in batch]
-                        for (candidate, conversation_id, candidate_matches), future in zip(batch, futures):
+                        for (candidate, conversation_id), future in zip(batch, futures):
                             try:
                                 detail = future.result()
                                 parts_container = detail.get("conversation_parts") or {}
@@ -88,25 +90,39 @@ class ConversationExporter:
                                 response_part_count = int(parts_container.get("total_count") or 0) if isinstance(parts_container, dict) else 0
                                 available_count = len(parts) + (1 if detail.get("source") else 0)
                                 truncated = expected_parts > available_count or response_part_count > len(parts)
-                                if truncated:
-                                    known_count = max(expected_parts, response_part_count + (1 if detail.get("source") else 0))
-                                    limitations.append(f"Обращение {conversation_id}: API вернул не всю историю (доступно {available_count}, ожидается {known_count} частей); активность в периоде может быть не обнаружена.")
-                                    errors += 1
 
                                 part_matches = any(
                                     isinstance(part, dict) and in_period(part.get("created_at"))
                                     for part in parts
                                 )
-                                detail_matches = in_period(detail.get("created_at")) or in_period(detail.get("updated_at"))
-                                if not candidate_matches and not detail_matches and not part_matches:
-                                    if truncated:
-                                        limitations.append(f"Обращение {conversation_id}: невозможно проверить продолжение в периоде из-за лимита истории API.")
+                                created_at = candidate.get("created_at", detail.get("created_at"))
+                                created_matches = in_period(created_at) or in_period(detail.get("created_at"))
+                                updated_matches = in_period(candidate.get("updated_at")) or in_period(detail.get("updated_at"))
+                                if selection == "new":
+                                    selected = created_matches
+                                elif selection == "updated":
+                                    try:
+                                        is_old = created_at is not None and int(created_at) < date_range.epoch_bounds()[0]
+                                    except (TypeError, ValueError, OverflowError):
+                                        is_old = False
+                                    selected = is_old and (updated_matches or part_matches)
+                                else:
+                                    selected = created_matches or updated_matches or part_matches
+                                if not selected:
+                                    if truncated and selection != "new" and not created_matches:
+                                        known_count = max(expected_parts, response_part_count + (1 if detail.get("source") else 0))
+                                        limitations.append(f"Обращение {conversation_id}: невозможно проверить продолжение в периоде из-за лимита истории API (доступно {available_count}, ожидается {known_count} частей).")
+                                        errors += 1
                                     continue
 
-                                if not candidate_matches:
-                                    found += 1
+                                if truncated:
+                                    known_count = max(expected_parts, response_part_count + (1 if detail.get("source") else 0))
+                                    limitations.append(f"Обращение {conversation_id}: API вернул не всю историю (доступно {available_count}, ожидается {known_count} частей); экспортированная история неполна.")
+                                    errors += 1
+
+                                found += 1
                                 exported += 1
-                                yield self._normalize(detail, parts)
+                                yield self._normalize(detail, parts, fields=fields)
                             except Exception as exc:
                                 errors += 1
                                 limitations.append(f"Не удалось получить полную историю одного обращения ({type(exc).__name__}).")
@@ -116,7 +132,7 @@ class ConversationExporter:
                 limitations.append(f"Получение списка обращений завершилось ошибкой: {type(exc).__name__}.")
                 logger.error("Ошибка получения списка обращений (%s)", type(exc).__name__)
 
-        store.merge(records())
+        store.replace(records())
         elapsed_seconds = time.perf_counter() - started_monotonic
         manifest = {
             "start": date_range.start.isoformat(),
@@ -124,6 +140,8 @@ class ConversationExporter:
             "started_at": started_at,
             "elapsed_seconds": round(elapsed_seconds, 3),
             "api_version": api_version,
+            "selection": selection,
+            "fields": fields,
             "found_count": found,
             "exported_count": exported,
             "error_count": errors,
@@ -135,7 +153,26 @@ class ConversationExporter:
         return {**manifest, "output_dir": str(output_dir)}
 
     @staticmethod
-    def _normalize(conversation: dict, parts: list) -> dict:
+    def _normalize(conversation: dict, parts: list, *, fields: str = "all") -> dict:
+        if fields == "important":
+            result = {
+                key: conversation[key]
+                for key in ("id", "title", "created_at", "updated_at")
+                if key in conversation
+            }
+            source = conversation.get("source")
+            if isinstance(source, dict) and "body" in source:
+                result["source"] = {"body": source["body"]}
+            result["conversation_parts"] = [
+                {
+                    **{key: part[key] for key in ("part_type", "created_at", "body") if key in part},
+                    **({"author": {"type": part["author"]["type"]}}
+                       if isinstance(part.get("author"), dict) and "type" in part["author"] else {}),
+                }
+                for part in parts if isinstance(part, dict)
+            ]
+            return ConversationExporter._convert_timestamps_to_utc(result)
+
         result: dict[str, Any] = {}
         for field in ("id", "type", "title", "created_at", "updated_at", "state", "open", "read", "priority",
                       "waiting_since", "snoozed_until", "admin_assignee_id", "team_assignee_id", "tags", "custom_attributes"):

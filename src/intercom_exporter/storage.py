@@ -49,6 +49,26 @@ class JsonlStore:
                 if temporary and temporary.exists():
                     temporary.unlink()
 
+    def replace(self, records: Iterable[dict]) -> int:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = None
+        ids: set[str] = set()
+        try:
+            with tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="\n", dir=self.path.parent,
+                                             prefix=".conversations-", suffix=".tmp", delete=False) as handle:
+                temp_path = Path(handle.name)
+                for record in records:
+                    record_id = str(record["id"])
+                    if record_id in ids:
+                        continue
+                    ids.add(record_id)
+                    handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+            os.replace(temp_path, self.path)
+            return len(ids)
+        finally:
+            if temp_path and temp_path.exists():
+                temp_path.unlink()
+
     def write_manifest(self, manifest: dict) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temp_path = None
