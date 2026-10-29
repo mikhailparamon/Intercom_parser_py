@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
+import logging
 import threading
 
 import pytest
@@ -82,12 +83,13 @@ def test_invalid_json_raises_safe_api_error():
         client._request("GET", "/test")
 
 
-def test_search_paginates_and_uses_creation_bounds():
+def test_search_paginates_and_logs_cumulative_candidates(caplog):
     session = FakeSession([
         FakeResponse(payload={"conversations": [{"id": "1"}], "pages": {"next": {"starting_after": "cursor1"}}}),
         FakeResponse(payload={"conversations": [{"id": "2"}], "pages": {}}),
     ])
     client = IntercomClient("t", "2.17", session=session, sleeper=lambda _: None)
+    caplog.set_level(logging.INFO, logger="intercom_exporter.client")
     items = list(client.search_conversations(date(2026, 7, 1), date(2026, 10, 1)))
     assert [item["id"] for item in items] == ["1", "2"]
     query = session.calls[0][2]["json"]["query"]
@@ -99,6 +101,11 @@ def test_search_paginates_and_uses_creation_bounds():
     updated_filters = query["value"][1]["value"]
     assert updated_filters[0] == {"field": "created_at", "operator": "<", "value": str(1790812799)}
     assert updated_filters[1] == {"field": "updated_at", "operator": ">", "value": str(1782864000)}
+    assert len(updated_filters) == 2
+    assert [record.getMessage() for record in caplog.records] == [
+        "Всего получено кандидатов от API: 1",
+        "Всего получено кандидатов от API: 2",
+    ]
     assert session.calls[1][2]["json"]["pagination"]["starting_after"] == "cursor1"
 
 

@@ -108,6 +108,7 @@ class IntercomClient:
                         "operator": "AND",
                         "value": [
                             created_before_end,
+                            # Keep later-updated candidates: their conversation parts may fall in the requested period.
                             {"field": "updated_at", "operator": ">", "value": str(start_epoch)},
                         ],
                     },
@@ -116,12 +117,14 @@ class IntercomClient:
             "pagination": {"per_page": 150},
         }
         seen_cursors: set[str] = set()
+        total_candidates = 0
         while True:
             response = self._request("POST", "/conversations/search", json=payload)
             items = response.get("conversations", [])
             if not isinstance(items, list):
                 raise IntercomAPIError("Intercom API вернул некорректный список обращений")
-            logger.info("Получено объектов обращений: %d", len(items))
+            total_candidates += len(items)
+            logger.info("Всего получено кандидатов от API: %d", total_candidates)
             yield from (item for item in items if isinstance(item, dict))
             pages = response.get("pages") or {}
             next_page = pages.get("next") if isinstance(pages, dict) else None

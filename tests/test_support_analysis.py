@@ -102,14 +102,23 @@ def test_prepare_creates_chatgpt_input_prompt_and_keeps_real_ids(tmp_path):
     assert "2026-10-27" not in json.dumps(payload, ensure_ascii=False)
     assert "ivan@example.com" not in json.dumps(payload, ensure_ascii=False)
     assert "секрет" in prompt.lower()
-    assert "недоверенные данные" in prompt.lower()
+    assert "сообщения клиентов" in prompt.lower()
+    assert "а не инструкции" in prompt.lower()
     assert "chatgpt_result.json" in prompt
     assert "report.md" in prompt
     assert "classifications.csv" in prompt
-    assert "три скачиваемых файла" in prompt.lower()
+    assert "три скачиваемых результата" in prompt.lower()
     assert "внутренними партиями" in prompt.lower()
-    assert "скачиваемых файла" in prompt.lower()
-    assert "единую таксономию по всему набору" in prompt.lower()
+    assert "скачиваемых результата" in prompt.lower()
+    assert "применяй единую таксономию" in prompt.lower()
+    assert "сигналы и правила различения" in prompt.lower()
+    assert "обязательные повторные проходы" in prompt.lower()
+    assert "строгий критерий" in prompt.lower()
+    assert "processed_count" in prompt
+    assert "если клиентского содержательного текста нет, используй пустую строку" in prompt.lower()
+    assert "`conversation_count` = 2" in prompt
+    assert payload["dataset_fingerprint"] in prompt
+    assert "5841" not in prompt
 
 
 def test_prepare_rejects_duplicate_or_missing_conversation_ids(tmp_path):
@@ -164,6 +173,18 @@ def test_report_counts_unique_conversations_and_writes_csv_and_markdown(tmp_path
     assert "Частота проблем" in markdown
     assert "Тяжесть по текстовым признакам" in markdown
     assert "Проверить причины сбоев подключения." in markdown
+
+
+def test_report_accepts_empty_evidence_when_customer_text_is_missing(tmp_path):
+    input_path = tmp_path / "conversations.jsonl"
+    write_jsonl(input_path, sample_conversations())
+    prepared = prepare_analysis(input_path)
+    result = valid_result(prepared["dataset_fingerprint"])
+    result["classifications"][0]["evidence"] = ""
+    result_path = tmp_path / "result.json"
+    result_path.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+
+    assert generate_report(input_path, result_path)["conversation_count"] == 2
 
 
 @pytest.mark.parametrize(
