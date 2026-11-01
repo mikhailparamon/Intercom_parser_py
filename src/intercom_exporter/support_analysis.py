@@ -68,7 +68,7 @@ def sanitize_text(value: str) -> str:
     return text
 
 
-def _read_conversations(path: str | Path) -> list[dict[str, Any]]:
+def _read_conversations(path: str | Path, *, allow_empty: bool = False) -> list[dict[str, Any]]:
     input_path = Path(path)
     if not input_path.is_file():
         raise AnalysisError(f"Файл выгрузки не найден: {input_path}")
@@ -115,7 +115,7 @@ def _read_conversations(path: str | Path) -> list[dict[str, Any]]:
                     append_row(row, f"строке {line_number}")
     except OSError as exc:
         raise AnalysisError(f"Не удалось прочитать файл выгрузки: {input_path}") from exc
-    if not rows:
+    if not rows and not allow_empty:
         raise AnalysisError("Файл выгрузки не содержит обращений")
     return rows
 
@@ -229,6 +229,125 @@ def prepare_analysis(input_path: str | Path, output_dir: str | Path | None = Non
         "input_file_bytes": input_file_bytes,
         "output_dir": str(output),
         "dataset_fingerprint": payload["dataset_fingerprint"],
+    }
+
+
+def _union_conversations(week_rows: list[dict], day_rows: list[dict]) -> list[dict]:
+    union: dict[str, dict] = {}
+    for row in [*week_rows, *day_rows]:
+        conversation_id = str(row["id"])
+        if conversation_id in union and union[conversation_id] != row:
+            raise AnalysisError(f"ID {conversation_id} имеет разное содержимое в недельном и дневном файлах")
+        union.setdefault(conversation_id, row)
+    return list(union.values())
+
+
+def _monitoring_prompt(week: dict, day: dict, combined: dict, week_bytes: int, day_bytes: int) -> str:
+    template_path = Path(__file__).with_name("support_analysis_prompt_template.md")
+    template = template_path.read_text(encoding="utf-8")
+    start = template.index("## 1. Безопасность и единица анализа")
+    end = template.index("## 8. Формат `chatgpt_result.json`")
+    classification_policy = template[start:end].strip()
+    week_ids = {item["id"] for item in week["conversations"]}
+    day_ids = {item["id"] for item in day["conversations"]}
+    overlap = len(week_ids & day_ids)
+    return f"""# Единый анализ мониторинговых окон
+
+Проанализируй **оба** входных файла: `chatgpt_input_week.json` и `chatgpt_input_day.json`.
+Недельное окно: {week.get('period', 'последние 7 завершённых дней')}; {week['conversation_count']} обращений (fingerprint `{week['dataset_fingerprint']}`, {week_bytes} байт). Дневное окно: {day.get('period', 'последний завершённый день')}; {day['conversation_count']} обращений (fingerprint `{day['dataset_fingerprint']}`, {day_bytes} байт). Совпадают {overlap} ID. Объединение содержит {combined['conversation_count']} уникальных ID (fingerprint `{combined['dataset_fingerprint']}`).
+
+## Правило объединённого анализа
+
+- Проверь фактические `conversation_count`, fingerprint и ID **в каждом** файле.
+- Объедини наборы по `id`. Совпадающие записи классифицируй **один раз**, используя один общий набор категорий; классификации не дублируй по периодам.
+- Определи членство ID в окнах по фактическим множествам входных файлов. Не предполагай, что дневной файл всегда является подмножеством недельного: сообщи о расхождении, если это не так.
+- Классифицируй все уникальные ID объединения. Подготовь отдельные резюме и рекомендации для недели и дня, опираясь только на записи соответствующего файла. Не складывай недельные и дневные количества: дневные обращения входят в недельный период и образуют пересечение.
+- Количество, рейтинг категорий, доли и тяжесть считай программно по классификациям и членству ID. Не выдумывай динамику внутри недели, которой нельзя установить по этим двум снимкам.
+
+Создай **один комплект** результатов в доступных для скачивания файлах:
+
+1. `chatgpt_result.json` — единый список классификаций для уникальных ID, общая таксономия и отдельные summary/recommendations для каждого окна.
+2. `classifications.csv` — одна строка на уникальный ID и колонка `periods` со значениями `week`, `day` или `week;day`.
+3. `report.md` — единый отчёт с отдельными выводами за неделю и день, сравнительной таблицей категорий, размером пересечения и явным предупреждением, что дневные обращения входят в недельные.
+
+## Формат `chatgpt_result.json`
+
+```json
+{{
+  "complete": true,
+  "conversation_count": {combined['conversation_count']},
+  "dataset_fingerprint": "{combined['dataset_fingerprint']}",
+  "categories": [{{"name": "...", "description": "..."}}],
+  "classifications": [
+    {{"id": "...", "category": "...", "subcategory": "...", "problem_summary": "...", "severity": null, "severity_reason": "...", "confidence": "low", "evidence": "..."}}
+  ],
+  "executive_summary": "Общий краткий вывод по объединению",
+  "recommendations": ["Общая рекомендация"],
+  "period_analysis": {{
+    "week": {{"conversation_count": {week['conversation_count']}, "dataset_fingerprint": "{week['dataset_fingerprint']}", "executive_summary": "Вывод только по недельному набору", "recommendations": ["..."]}},
+    "day": {{"conversation_count": {day['conversation_count']}, "dataset_fingerprint": "{day['dataset_fingerprint']}", "executive_summary": "Вывод только по дневному набору", "recommendations": ["..."]}}
+  }}
+}}
+```
+
+В `classifications` должна быть ровно одна запись на каждый уникальный ID объединения. Категории должны быть общими для двух окон. `period_analysis.week/day` обязаны сохранять соответствующие число обращений и fingerprint из фактического файла. Не объявляй результат полным при пропущенных ID.
+
+{classification_policy}
+
+## Требования к единому `report.md`
+
+- В начале укажи фактические имена обоих файлов, их размеры, количество записей и fingerprint, число уникальных ID объединения и размер пересечения.
+- Раздели частоты, тяжесть, резюме и рекомендации на **последние 7 дней** и **последний день**. Добавь сравнение количества и долей категорий между окнами.
+- В каждой таблице долю рассчитывай от числа обращений соответствующего окна. Дневные значения не прибавляй к недельным и не представляй окна как непересекающиеся.
+- Включи ограничения методики и явно укажи, что классификация автоматическая/эвристическая, если нет полной экспертной проверки.
+- Используй один общий набор классификаций; примеры и цитаты должны быть безопасными и анонимизированными.
+
+## Финальная проверка
+
+Убедись, что результат покрывает уникальное объединение ID ровно один раз; `conversation_count` и fingerprint объединения правильны; у каждого окна совпадают его фактические количество и fingerprint; CSV имеет те же ID и корректное членство; итоговый единый `report.md` содержит выводы для обоих окон. Не печатай классификацию тысяч обращений в чат.
+"""
+
+
+def prepare_monitoring_analysis(
+    week_input_path: str | Path,
+    day_input_path: str | Path,
+    output_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    week_path, day_path = Path(week_input_path), Path(day_input_path)
+    week_rows = _read_conversations(week_path, allow_empty=True)
+    day_rows = _read_conversations(day_path, allow_empty=True)
+    union_rows = _union_conversations(week_rows, day_rows)
+    if not union_rows:
+        raise AnalysisError("Недельный и дневной срезы не содержат обращений")
+    week_payload = _build_payload(week_rows)
+    day_payload = _build_payload(day_rows)
+    week_payload["period"] = _period_label(week_path) or "Последние 7 завершённых дней UTC"
+    day_payload["period"] = _period_label(day_path) or "Последний завершённый день UTC"
+    combined_payload = _build_payload(union_rows)
+    if output_dir:
+        output = Path(output_dir)
+    elif week_path.parent.name == "last_week" and day_path.parent.name == "last_day" and week_path.parent.parent == day_path.parent.parent:
+        output = week_path.parent.parent / "support-analysis"
+    else:
+        output = week_path.parent / "support-analysis"
+    week_file = output / "chatgpt_input_week.json"
+    day_file = output / "chatgpt_input_day.json"
+    _write_json(week_file, week_payload)
+    _write_json(day_file, day_payload)
+    prompt = _monitoring_prompt(
+        week_payload, day_payload, combined_payload,
+        week_file.stat().st_size, day_file.stat().st_size,
+    )
+    _write_text(output / "PROMPT.md", prompt)
+    return {
+        "week_conversation_count": len(week_rows),
+        "day_conversation_count": len(day_rows),
+        "unique_conversation_count": len(union_rows),
+        "overlap_count": len({str(row["id"]) for row in week_rows} & {str(row["id"]) for row in day_rows}),
+        "output_dir": str(output),
+        "week_fingerprint": week_payload["dataset_fingerprint"],
+        "day_fingerprint": day_payload["dataset_fingerprint"],
+        "dataset_fingerprint": combined_payload["dataset_fingerprint"],
     }
 
 
@@ -385,25 +504,133 @@ def generate_report(input_path: str | Path, result_path: str | Path,
     output = Path(output_dir) if output_dir else Path(input_path).parent / "support-analysis"
     _write_text(output / "report.md", markdown)
     csv_path = output / "classifications.csv"
-    csv_path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = None
-    try:
-        with tempfile.NamedTemporaryFile("w", encoding="utf-8-sig", newline="", dir=csv_path.parent,
-                                         prefix=".classifications-", suffix=".tmp", delete=False) as handle:
-            temp_path = Path(handle.name)
-            writer = csv.DictWriter(handle, fieldnames=("id", "category", "subcategory", "problem_summary", "severity",
-                                                        "severity_reason", "confidence", "evidence"))
-            writer.writeheader()
-            writer.writerows(classifications)
-        os.replace(temp_path, csv_path)
-    finally:
-        if temp_path and temp_path.exists():
-            temp_path.unlink()
+    _write_classifications_csv(csv_path, classifications)
     return {
         "conversation_count": len(rows),
         "category_counts": category_counts,
         "severity_counts": severity_counts,
         "report_path": str(output / "report.md"),
+        "classifications_path": str(csv_path),
+    }
+
+
+def _write_classifications_csv(path: Path, classifications: list[dict], periods: dict[str, set[str]] | None = None) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fields = ("id", "category", "subcategory", "problem_summary", "severity",
+              "severity_reason", "confidence", "evidence")
+    if periods is not None:
+        fields = (*fields, "periods")
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8-sig", newline="", dir=path.parent,
+                                         prefix=".classifications-", suffix=".tmp", delete=False) as handle:
+            temp_path = Path(handle.name)
+            writer = csv.DictWriter(handle, fieldnames=fields)
+            writer.writeheader()
+            for item in classifications:
+                row = dict(item)
+                if periods is not None:
+                    conversation_id = item["id"]
+                    row["periods"] = ";".join(
+                        label for label, ids in (("week", periods["week"]), ("day", periods["day"]))
+                        if conversation_id in ids
+                    )
+                writer.writerow(row)
+        os.replace(temp_path, path)
+    finally:
+        if temp_path and temp_path.exists():
+            temp_path.unlink()
+
+
+def _validate_period_analysis(result: dict, week_payload: dict, day_payload: dict) -> dict[str, dict]:
+    periods = result.get("period_analysis")
+    if not isinstance(periods, dict):
+        raise AnalysisError("В результате отсутствует period_analysis для недели и дня")
+    expected = {"week": week_payload, "day": day_payload}
+    validated = {}
+    for name, payload in expected.items():
+        period = periods.get(name)
+        if not isinstance(period, dict):
+            raise AnalysisError(f"В результате отсутствует period_analysis.{name}")
+        if period.get("conversation_count") != payload["conversation_count"]:
+            raise AnalysisError(f"conversation_count окна {name} не совпадает с входным файлом")
+        if period.get("dataset_fingerprint") != payload["dataset_fingerprint"]:
+            raise AnalysisError(f"dataset_fingerprint окна {name} не совпадает с входным файлом")
+        summary = period.get("executive_summary")
+        if not isinstance(summary, str) or not summary.strip():
+            raise AnalysisError(f"В period_analysis.{name} отсутствует executive_summary")
+        recommendations = period.get("recommendations")
+        if not isinstance(recommendations, list) or any(not isinstance(item, str) or not item.strip() for item in recommendations):
+            raise AnalysisError(f"recommendations окна {name} должны быть списком непустых строк")
+        validated[name] = {"executive_summary": summary.strip(), "recommendations": recommendations}
+    return validated
+
+
+def generate_monitoring_report(
+    week_input_path: str | Path,
+    day_input_path: str | Path,
+    result_path: str | Path,
+    output_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    week_path, day_path = Path(week_input_path), Path(day_input_path)
+    week_rows = _read_conversations(week_path, allow_empty=True)
+    day_rows = _read_conversations(day_path, allow_empty=True)
+    union_rows = _union_conversations(week_rows, day_rows)
+    if not union_rows:
+        raise AnalysisError("Недельный и дневной срезы не содержат обращений")
+    week_payload, day_payload = _build_payload(week_rows), _build_payload(day_rows)
+    union_payload = _build_payload(union_rows)
+    result = _load_result(result_path)
+    categories, classifications = _validate_result(union_rows, union_payload, result)
+    period_analysis = _validate_period_analysis(result, week_payload, day_payload)
+
+    week_ids = {str(row["id"]) for row in week_rows}
+    day_ids = {str(row["id"]) for row in day_rows}
+    classifications_by_id = {item["id"]: item for item in classifications}
+    week_classifications = [classifications_by_id[item] for item in classifications_by_id if item in week_ids]
+    day_classifications = [classifications_by_id[item] for item in classifications_by_id if item in day_ids]
+    week_markdown, week_counts, _ = _markdown_report(
+        week_rows, categories, week_classifications, period_analysis["week"], _period_label(week_path) or "Последние 7 дней",
+    )
+    day_markdown, day_counts, _ = _markdown_report(
+        day_rows, categories, day_classifications, period_analysis["day"], _period_label(day_path) or "Последний день",
+    )
+    week_markdown = week_markdown.split("\n", 1)[-1].lstrip()
+    day_markdown = day_markdown.split("\n", 1)[-1].lstrip()
+
+    category_names = [item["name"] for item in categories]
+    lines = [
+        "# Сводный анализ обращений поддержки: неделя и день", "",
+        f"Недельный набор: **{len(week_rows)}** обращений; дневной набор: **{len(day_rows)}** обращений; "
+        f"уникальное объединение: **{len(union_rows)}**; пересечение окон: **{len(week_ids & day_ids)}**.", "",
+        "Дневные обращения входят в недельный набор. Периодные показатели приведены раздельно и не суммируются.", "",
+        "## Сравнение периодов", "",
+        "| Категория | За неделю | Доля недели | За день | Доля дня |", "|---|---:|---:|---:|---:|",
+    ]
+    for name in category_names:
+        week_count, day_count = week_counts.get(name, 0), day_counts.get(name, 0)
+        week_share = f"{week_count / len(week_rows) * 100:.1f}%" if week_rows else "—"
+        day_share = f"{day_count / len(day_rows) * 100:.1f}%" if day_rows else "—"
+        lines.append(f"| {name} | {week_count} | {week_share} | {day_count} | {day_share} |")
+    lines.extend(["", "## Последние 7 дней", "", week_markdown, "", "## Последний день", "", day_markdown, ""])
+    report_markdown = "\n".join(lines)
+
+    if output_dir:
+        output = Path(output_dir)
+    elif week_path.parent.name == "last_week" and day_path.parent.name == "last_day" and week_path.parent.parent == day_path.parent.parent:
+        output = week_path.parent.parent / "support-analysis"
+    else:
+        output = week_path.parent / "support-analysis"
+    report_path = output / "report.md"
+    _write_text(report_path, report_markdown)
+    csv_path = output / "classifications.csv"
+    _write_classifications_csv(csv_path, classifications, {"week": week_ids, "day": day_ids})
+    return {
+        "unique_conversation_count": len(union_rows),
+        "week_conversation_count": len(week_rows),
+        "day_conversation_count": len(day_rows),
+        "overlap_count": len(week_ids & day_ids),
+        "report_path": str(report_path),
         "classifications_path": str(csv_path),
     }
 
@@ -418,6 +645,15 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--input", required=True, help="Исходный conversations.json или conversations.jsonl")
     report.add_argument("--result", required=True, help="JSON-результат ChatGPT")
     report.add_argument("--output", help="Каталог отчёта (по умолчанию: support-analysis рядом с входным файлом)")
+    monitor_prepare = subparsers.add_parser("prepare-monitoring", help="Подготовить недельный и дневной наборы с одним общим промптом")
+    monitor_prepare.add_argument("--week", required=True, help="Недельный conversations.json")
+    monitor_prepare.add_argument("--day", required=True, help="Дневной conversations.json")
+    monitor_prepare.add_argument("--output", help="Общий каталог с двумя входными файлами и PROMPT.md")
+    monitor_report = subparsers.add_parser("report-monitoring", help="Проверить общий результат и построить единый отчёт по двум окнам")
+    monitor_report.add_argument("--week", required=True, help="Исходный conversations.json недельного окна")
+    monitor_report.add_argument("--day", required=True, help="Исходный conversations.json дневного окна")
+    monitor_report.add_argument("--result", required=True, help="Единый chatgpt_result.json")
+    monitor_report.add_argument("--output", help="Общий каталог для report.md и classifications.csv")
     return parser
 
 
@@ -429,9 +665,19 @@ def main(argv: list[str] | None = None) -> int:
             result = prepare_analysis(args.input, args.output)
             size_mb = result["input_file_bytes"] / (1024 * 1024)
             print(f"Подготовлено обращений: {result['conversation_count']}; сообщений: {result['message_count']}; размер JSON: {size_mb:.1f} МБ. Файлы для ChatGPT: {result['output_dir']}")
-        else:
+        elif args.command == "report":
             result = generate_report(args.input, args.result, args.output)
             print(f"Отчёт сохранён: {result['report_path']}. Разметка: {result['classifications_path']}")
+        elif args.command == "prepare-monitoring":
+            result = prepare_monitoring_analysis(args.week, args.day, args.output)
+            print(
+                f"Подготовлены недельный срез ({result['week_conversation_count']}), дневной срез "
+                f"({result['day_conversation_count']}), уникальных ID: {result['unique_conversation_count']}. "
+                f"Один PROMPT.md и оба входных JSON: {result['output_dir']}"
+            )
+        else:
+            result = generate_monitoring_report(args.week, args.day, args.result, args.output)
+            print(f"Единый отчёт сохранён: {result['report_path']}. Разметка: {result['classifications_path']}")
     except AnalysisError as exc:
         print(f"Ошибка анализа: {exc}")
         return 1

@@ -5,6 +5,7 @@ import pytest
 
 from intercom_exporter.support_analysis import (
     AnalysisError,
+    _build_payload,
     generate_report,
     main,
     prepare_analysis,
@@ -250,3 +251,118 @@ def test_cli_prepare_and_report_commands_work_without_api_credentials(tmp_path):
     payload = json.loads((tmp_path / "support-analysis" / "chatgpt_input.json").read_text(encoding="utf-8"))
     result_path.write_text(json.dumps(valid_result(payload["dataset_fingerprint"]), ensure_ascii=False), encoding="utf-8")
     assert main(["report", "--input", str(input_path), "--result", str(result_path)]) == 0
+
+def test_prepare_monitoring_creates_two_inputs_and_one_shared_prompt(tmp_path):
+    from intercom_exporter.support_analysis import prepare_monitoring_analysis
+
+    week_dir, day_dir = tmp_path / "last_week", tmp_path / "last_day"
+    week_dir.mkdir()
+    day_dir.mkdir()
+    week_path = week_dir / "conversations.json"
+    day_path = day_dir / "conversations.json"
+    week_rows = sample_conversations()
+    day_rows = [week_rows[0]]
+    week_path.write_text(json.dumps(week_rows, ensure_ascii=False), encoding="utf-8")
+    day_path.write_text(json.dumps(day_rows, ensure_ascii=False), encoding="utf-8")
+
+    prepared = prepare_monitoring_analysis(week_path, day_path)
+
+    analysis_dir = tmp_path / "support-analysis"
+    week = json.loads((analysis_dir / "chatgpt_input_week.json").read_text(encoding="utf-8"))
+    day = json.loads((analysis_dir / "chatgpt_input_day.json").read_text(encoding="utf-8"))
+    prompt = (analysis_dir / "PROMPT.md").read_text(encoding="utf-8")
+    assert week["conversation_count"] == 2
+    assert day["conversation_count"] == 1
+    assert prepared["unique_conversation_count"] == 2
+    assert "chatgpt_input_week.json" in prompt
+    assert "chatgpt_input_day.json" in prompt
+    assert "одну классификацию" in prompt.lower()
+    assert "report.md" in prompt
+    assert not (analysis_dir / "last_week" / "PROMPT.md").exists()
+    assert not (analysis_dir / "last_day" / "PROMPT.md").exists()
+
+
+def test_generate_monitoring_report_validates_union_and_reports_both_windows(tmp_path):
+    from intercom_exporter.support_analysis import generate_monitoring_report
+
+    week_dir, day_dir = tmp_path / "last_week", tmp_path / "last_day"
+    week_dir.mkdir()
+    day_dir.mkdir()
+    week_path = week_dir / "conversations.json"
+    day_path = day_dir / "conversations.json"
+    week_rows = sample_conversations()
+    day_rows = [week_rows[0]]
+    week_path.write_text(json.dumps(week_rows, ensure_ascii=False), encoding="utf-8")
+    day_path.write_text(json.dumps(day_rows, ensure_ascii=False), encoding="utf-8")
+    union_payload = _build_payload(week_rows)
+    result = valid_result(union_payload["dataset_fingerprint"])
+    result["period_analysis"] = {
+        "week": {"conversation_count": 2, "dataset_fingerprint": _build_payload(week_rows)["dataset_fingerprint"], "executive_summary": "За неделю преобладали проблемы VPN.", "recommendations": ["Уточнять устройства."]},
+        "day": {"conversation_count": 1, "dataset_fingerprint": _build_payload(day_rows)["dataset_fingerprint"], "executive_summary": "Сегодня был один случай подключения.", "recommendations": ["Проверять VPN-сценарий."]},
+    }
+    result_path = tmp_path / "chatgpt_result.json"
+    result_path.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+
+    report = generate_monitoring_report(week_path, day_path, result_path)
+
+    markdown = (tmp_path / "support-analysis" / "report.md").read_text(encoding="utf-8")
+    with (tmp_path / "support-analysis" / "classifications.csv").open(encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert report["unique_conversation_count"] == 2
+    assert report["week_conversation_count"] == 2
+    assert report["day_conversation_count"] == 1
+    assert len(rows) == 2
+    assert rows[0]["periods"] == "week;day"
+    assert rows[1]["periods"] == "week"
+    assert "Последние 7 дней" in markdown
+    assert "Последний день" in markdown
+    assert "Сравнение периодов" in markdown
+    assert "За неделю преобладали проблемы VPN." in markdown
+    assert "Сегодня был один случай подключения." in markdown
+
+
+def test_monitoring_report_rejects_wrong_window_fingerprint(tmp_path):
+    from intercom_exporter.support_analysis import _build_payload, generate_monitoring_report
+
+    week_rows = sample_conversations()
+    day_rows = [week_rows[0]]
+    week_path = tmp_path / "week.json"
+    day_path = tmp_path / "day.json"
+    week_path.write_text(json.dumps(week_rows, ensure_ascii=False), encoding="utf-8")
+    day_path.write_text(json.dumps(day_rows, ensure_ascii=False), encoding="utf-8")
+    result = valid_result(_build_payload(week_rows)["dataset_fingerprint"])
+    result["period_analysis"] = {
+        "week": {"conversation_count": 2, "dataset_fingerprint": _build_payload(week_rows)["dataset_fingerprint"], "executive_summary": "Резюме недели.", "recommendations": []},
+        "day": {"conversation_count": 1, "dataset_fingerprint": "wrong", "executive_summary": "Резюме дня.", "recommendations": []},
+    }
+    result_path = tmp_path / "result.json"
+    result_path.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(AnalysisError, match="day.*fingerprint|fingerprint.*day"):
+        generate_monitoring_report(week_path, day_path, result_path)
+
+
+def test_cli_prepare_monitoring_and_report_monitoring_use_one_shared_output(tmp_path, capsys):
+    from intercom_exporter.support_analysis import _build_payload
+
+    week_rows = sample_conversations()
+    day_rows = [week_rows[0]]
+    week_path, day_path = tmp_path / "week.json", tmp_path / "day.json"
+    week_path.write_text(json.dumps(week_rows, ensure_ascii=False), encoding="utf-8")
+    day_path.write_text(json.dumps(day_rows, ensure_ascii=False), encoding="utf-8")
+    output_dir = tmp_path / "combined-analysis"
+    assert main(["prepare-monitoring", "--week", str(week_path), "--day", str(day_path), "--output", str(output_dir)]) == 0
+    result = valid_result(_build_payload(week_rows)["dataset_fingerprint"])
+    result["period_analysis"] = {
+        "week": {"conversation_count": 2, "dataset_fingerprint": _build_payload(week_rows)["dataset_fingerprint"], "executive_summary": "Сводка недели.", "recommendations": []},
+        "day": {"conversation_count": 1, "dataset_fingerprint": _build_payload(day_rows)["dataset_fingerprint"], "executive_summary": "Сводка дня.", "recommendations": []},
+    }
+    result_path = output_dir / "chatgpt_result.json"
+    result_path.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+
+    assert main(["report-monitoring", "--week", str(week_path),
+                 "--day", str(day_path), "--result", str(result_path),
+                 "--output", str(output_dir)]) == 0
+    assert (output_dir / "report.md").is_file()
+    assert (output_dir / "classifications.csv").is_file()
+    assert "Единый отчёт сохранён" in capsys.readouterr().out

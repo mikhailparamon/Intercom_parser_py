@@ -96,11 +96,11 @@ def test_search_paginates_and_logs_cumulative_candidates(caplog):
     assert query["operator"] == "OR"
     assert session.calls[0][2]["json"]["pagination"]["per_page"] == 150
     creation_filters = query["value"][0]["value"]
-    assert creation_filters[0] == {"field": "created_at", "operator": ">", "value": str(1782864000)}
-    assert creation_filters[1] == {"field": "created_at", "operator": "<", "value": str(1790812799)}
+    assert creation_filters[0] == {"field": "created_at", "operator": ">", "value": str(1782863999)}
+    assert creation_filters[1] == {"field": "created_at", "operator": "<", "value": str(1790812800)}
     updated_filters = query["value"][1]["value"]
-    assert updated_filters[0] == {"field": "created_at", "operator": "<", "value": str(1790812799)}
-    assert updated_filters[1] == {"field": "updated_at", "operator": ">", "value": str(1782864000)}
+    assert updated_filters[0] == {"field": "created_at", "operator": "<", "value": str(1790812800)}
+    assert updated_filters[1] == {"field": "updated_at", "operator": ">", "value": str(1782863999)}
     assert len(updated_filters) == 2
     assert [record.getMessage() for record in caplog.records] == [
         "Всего получено кандидатов от API: 1",

@@ -92,7 +92,7 @@ class IntercomClient:
         end_dt = datetime(end.year, end.month, end.day, tzinfo=timezone.utc)
         start_epoch = int(start_dt.timestamp())
         end_epoch = int(end_dt.timestamp())
-        created_before_end = {"field": "created_at", "operator": "<", "value": str(end_epoch - 1)}
+        created_before_end = {"field": "created_at", "operator": "<", "value": str(end_epoch)}
         payload: dict[str, Any] = {
             "query": {
                 "operator": "OR",
@@ -100,7 +100,7 @@ class IntercomClient:
                     {
                         "operator": "AND",
                         "value": [
-                            {"field": "created_at", "operator": ">", "value": str(start_epoch)},
+                            {"field": "created_at", "operator": ">", "value": str(start_epoch - 1)},
                             created_before_end,
                         ],
                     },
@@ -109,7 +109,7 @@ class IntercomClient:
                         "value": [
                             created_before_end,
                             # Keep later-updated candidates: their conversation parts may fall in the requested period.
-                            {"field": "updated_at", "operator": ">", "value": str(start_epoch)},
+                            {"field": "updated_at", "operator": ">", "value": str(start_epoch - 1)},
                         ],
                     },
                 ],
