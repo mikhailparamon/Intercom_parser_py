@@ -1,5 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date
+from datetime import date, datetime, timezone
 import logging
 import threading
 
@@ -114,6 +114,19 @@ def test_repeated_pagination_cursor_is_rejected():
     client = IntercomClient("t", "2.17", session=FakeSession([FakeResponse(payload=payload), FakeResponse(payload=payload)]))
     with pytest.raises(IntercomAPIError, match="пагинации"):
         list(client.search_conversations(date(2026, 1, 1), date(2026, 2, 1)))
+
+
+def test_search_accepts_exact_datetimes_with_second_precision():
+    session = FakeSession([FakeResponse(payload={"conversations": [], "pages": {}})])
+    client = IntercomClient("t", "2.17", session=session, sleeper=lambda _: None)
+    start = datetime(2026, 11, 1, 8, 30, 15, tzinfo=timezone.utc)
+    end = datetime(2026, 11, 2, 8, 30, 15, tzinfo=timezone.utc)
+
+    list(client.search_conversations(start, end))
+
+    creation_filters = session.calls[0][2]["json"]["query"]["value"][0]["value"]
+    assert creation_filters[0] == {"field": "created_at", "operator": ">", "value": str(int(start.timestamp()) - 1)}
+    assert creation_filters[1] == {"field": "created_at", "operator": "<", "value": str(int(end.timestamp()))}
 
 
 def test_retrieve_conversation_returns_full_api_response():
