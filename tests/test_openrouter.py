@@ -88,6 +88,18 @@ def test_load_dahl_settings_is_optional_and_has_default_model(tmp_path, monkeypa
     assert settings.workers == 3
 
 
+@pytest.mark.parametrize("value", ["0", "11", "abc"])
+def test_dahl_workers_must_be_between_1_and_10(tmp_path, monkeypatch, value):
+    from intercom_exporter.config import load_dahl_settings
+
+    monkeypatch.delenv("DAHL_API_KEY", raising=False)
+    monkeypatch.delenv("DAHL_WORKERS", raising=False)
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"DAHL_API_KEY=key\nDAHL_WORKERS={value}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="DAHL_WORKERS"):
+        load_dahl_settings(env_file)
+
+
 def test_load_config_exposes_dahl_settings(tmp_path, monkeypatch):
     from intercom_exporter.config import load_config
 
@@ -169,6 +181,75 @@ def test_standard_analysis_sends_only_prepared_json_and_writes_all_outputs(tmp_p
     assert (output / "classifications.csv").is_file()
 
 
+def test_analysis_supports_dahl_endpoint_and_label(tmp_path, monkeypatch):
+    import intercom_exporter.openrouter as openrouter
+    from intercom_exporter.openrouter import DAHL_URL
+    from intercom_exporter.support_analysis import prepare_analysis
+
+    source = tmp_path / "conversations.json"
+    rows = sample_rows()
+    source.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
+    prepared = prepare_analysis(source)
+    calls = []
+
+    def fake_request(api_key, model, prompt, user_content, **kwargs):
+        calls.append((api_key, model, kwargs))
+        return valid_result(rows)
+
+    monkeypatch.setattr(openrouter, "_request_result", fake_request)
+    result = run_standard_analysis(
+        source, prepared["output_dir"], "dahl-secret", "MiniMaxAI/MiniMax-M2.7",
+        base_url=DAHL_URL, provider_label="Dahl",
+    )
+
+    assert result["result_path"].endswith("chatgpt_result.json")
+    assert calls and calls[0][0] == "dahl-secret"
+    assert calls[0][1] == "MiniMaxAI/MiniMax-M2.7"
+    assert calls[0][2]["base_url"] == DAHL_URL
+    assert calls[0][2]["provider_label"] == "Dahl"
+
+
+def test_request_result_uses_given_base_url(monkeypatch):
+    import intercom_exporter.openrouter as openrouter
+
+    seen = {}
+
+    class FakeOkResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"choices": [{"message": {"content": "{\"ok\": true}"}}]}
+
+    def fake_post(url, **kwargs):
+        seen["url"] = url
+        return FakeOkResponse()
+
+    monkeypatch.setattr(openrouter.requests, "post", fake_post)
+    assert openrouter._request_result("k", "m", "p", "c", base_url=openrouter.DAHL_URL, provider_label="Dahl") == {"ok": True}
+    assert seen["url"] == "https://inference.dahl.global/v1/chat/completions"
+
+
+def test_error_messages_use_provider_label(monkeypatch):
+    import intercom_exporter.openrouter as openrouter
+
+    class FakeErrorResponse:
+        status_code = 400
+
+        def raise_for_status(self):
+            import requests
+            raise requests.HTTPError(response=self)
+
+        def json(self):
+            return {"error": {"message": "bad model"}}
+
+    monkeypatch.setattr(openrouter.requests, "post", lambda *a, **k: FakeErrorResponse())
+    with pytest.raises(openrouter.OpenRouterError, match="Dahl"):
+        openrouter._request_result("k", "m", "p", "c", base_url=openrouter.DAHL_URL, provider_label="Dahl")
+
+
 def test_standard_analysis_classifies_multiple_batches_and_synthesizes_once(tmp_path, monkeypatch):
     from intercom_exporter import openrouter
     from intercom_exporter.support_analysis import prepare_analysis
@@ -181,7 +262,7 @@ def test_standard_analysis_classifies_multiple_batches_and_synthesizes_once(tmp_
     source_by_id = {row["id"]: row for row in rows}
     calls = []
 
-    def fake_request(api_key, model, prompt, user_content):
+    def fake_request(api_key, model, prompt, user_content, **_kwargs):
         calls.append(prompt)
         if prompt.startswith("Ты готовишь итоговый синтез"):
             return {"executive_summary": "Итог по трём обращениям.", "recommendations": ["Проверить подключение."]}
@@ -212,7 +293,7 @@ def test_batch_with_unknown_id_is_retried_with_explicit_allowlist(tmp_path, monk
     prepared = prepare_analysis(source)
     calls = []
 
-    def fake_request(api_key, model, prompt, user_content):
+    def fake_request(api_key, model, prompt, user_content, **_kwargs):
         calls.append((prompt, user_content))
         if len(calls) == 1:
             result = valid_result(rows)
@@ -243,7 +324,7 @@ def test_standard_analysis_runs_batches_with_bounded_parallelism(tmp_path, monke
     active = 0
     max_active = 0
 
-    def fake_request(api_key, model, prompt, user_content):
+    def fake_request(api_key, model, prompt, user_content, **_kwargs):
         nonlocal active, max_active
         if prompt.startswith("Ты готовишь итоговый синтез"):
             return {"executive_summary": "Итог.", "recommendations": ["Проверить подключение."]}
@@ -273,7 +354,7 @@ def test_verified_batch_cache_skips_api_request_on_repeat(tmp_path, monkeypatch)
     source.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
     prepared = prepare_analysis(source)
     calls = []
-    monkeypatch.setattr(openrouter, "_request_result", lambda *args: calls.append(args) or valid_result(rows))
+    monkeypatch.setattr(openrouter, "_request_result", lambda *args, **_kwargs: calls.append(args) or valid_result(rows))
 
     run_standard_analysis(source, prepared["output_dir"], "test-secret", "test/model")
     run_standard_analysis(source, prepared["output_dir"], "test-secret", "test/model")
@@ -336,7 +417,7 @@ def test_monitoring_analysis_batches_union_and_generates_period_summaries(tmp_pa
     source_by_id = {row["id"]: row for row in rows}
     calls = []
 
-    def fake_request(api_key, model, prompt, user_content):
+    def fake_request(api_key, model, prompt, user_content, **_kwargs):
         calls.append(prompt)
         if prompt.startswith("Ты готовишь итоговый синтез"):
             return {

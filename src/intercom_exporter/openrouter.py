@@ -22,6 +22,8 @@ from .support_analysis import (
 
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+DAHL_URL = "https://inference.dahl.global/v1/chat/completions"
+OPENROUTER_LABEL = "OpenRouter"
 REQUEST_TIMEOUT_SECONDS = 300
 MAX_COMPLETION_TOKENS = 64_000
 MAX_BATCH_INPUT_BYTES = 400_000
@@ -34,13 +36,13 @@ class OpenRouterError(AnalysisError):
     pass
 
 
-def _decode_model_result(response_body: Any) -> dict[str, Any]:
+def _decode_model_result(response_body: Any, provider_label: str = OPENROUTER_LABEL) -> dict[str, Any]:
     try:
         choice = response_body["choices"][0]
         message = choice["message"]
         content = message.get("content")
     except (KeyError, IndexError, TypeError) as exc:
-        raise OpenRouterError("OpenRouter вернул ответ без текста классификации.") from exc
+        raise OpenRouterError(f"{provider_label} вернул ответ без текста классификации.") from exc
     if isinstance(content, list):
         content = "".join(
             item.get("text", "") for item in content
@@ -58,7 +60,7 @@ def _decode_model_result(response_body: Any) -> dict[str, Any]:
         refusal = message.get("refusal")
         if refusal:
             details.append("refusal=да")
-        raise OpenRouterError("OpenRouter вернул пустой ответ классификации (" + ", ".join(details) + ").")
+        raise OpenRouterError(f"{provider_label} вернул пустой ответ классификации (" + ", ".join(details) + ").")
     text = content.strip()
     if text.startswith("```"):
         lines = text.splitlines()
@@ -67,9 +69,9 @@ def _decode_model_result(response_body: Any) -> dict[str, Any]:
     try:
         result = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise OpenRouterError("OpenRouter вернул невалидный JSON; ручные файлы анализа сохранены.") from exc
+        raise OpenRouterError(f"{provider_label} вернул невалидный JSON; ручные файлы анализа сохранены.") from exc
     if not isinstance(result, dict):
-        raise OpenRouterError("OpenRouter должен вернуть JSON-объект; ручные файлы анализа сохранены.")
+        raise OpenRouterError(f"{provider_label} должен вернуть JSON-объект; ручные файлы анализа сохранены.")
     return result
 
 
@@ -90,7 +92,15 @@ def _error_message(response: requests.Response | None) -> str:
     return message[:300]
 
 
-def _request_result(api_key: str, model: str, prompt: str, user_content: str) -> dict[str, Any]:
+def _request_result(
+    api_key: str,
+    model: str,
+    prompt: str,
+    user_content: str,
+    *,
+    base_url: str = OPENROUTER_URL,
+    provider_label: str = OPENROUTER_LABEL,
+) -> dict[str, Any]:
     request_data = {
         "model": model,
         "messages": [
@@ -104,19 +114,19 @@ def _request_result(api_key: str, model: str, prompt: str, user_content: str) ->
     for attempt in range(MAX_TRANSIENT_RETRIES + 1):
         try:
             response = requests.post(
-                OPENROUTER_URL,
+                base_url,
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                 json=request_data,
                 timeout=REQUEST_TIMEOUT_SECONDS,
             )
             response.raise_for_status()
             body = response.json()
-            return _decode_model_result(body)
+            return _decode_model_result(body, provider_label)
         except requests.Timeout as exc:
             if attempt < MAX_TRANSIENT_RETRIES:
                 time.sleep(2 ** attempt)
                 continue
-            raise OpenRouterError("Истекло время ожидания ответа OpenRouter; ручные файлы анализа сохранены.") from exc
+            raise OpenRouterError(f"Истекло время ожидания ответа {provider_label}; ручные файлы анализа сохранены.") from exc
         except requests.HTTPError as exc:
             response = exc.response
             status = response.status_code if response is not None else "неизвестен"
@@ -129,24 +139,24 @@ def _request_result(api_key: str, model: str, prompt: str, user_content: str) ->
                 time.sleep(max(delay, 0))
                 continue
             detail = _error_message(response)
-            suffix = f" Подробности OpenRouter: {detail}" if detail else ""
+            suffix = f" Подробности {provider_label}: {detail}" if detail else ""
             raise OpenRouterError(
-                f"OpenRouter вернул HTTP {status}.{suffix} Ручные файлы анализа сохранены."
+                f"{provider_label} вернул HTTP {status}.{suffix} Ручные файлы анализа сохранены."
             ) from exc
         except requests.RequestException as exc:
             if attempt < MAX_TRANSIENT_RETRIES:
                 time.sleep(2 ** attempt)
                 continue
-            raise OpenRouterError(f"Не удалось выполнить запрос OpenRouter; ручные файлы анализа сохранены: {exc}") from exc
+            raise OpenRouterError(f"Не удалось выполнить запрос {provider_label}; ручные файлы анализа сохранены: {exc}") from exc
         except ValueError as exc:
-            raise OpenRouterError("OpenRouter вернул ответ в неизвестном формате; ручные файлы анализа сохранены.") from exc
+            raise OpenRouterError(f"{provider_label} вернул ответ в неизвестном формате; ручные файлы анализа сохранены.") from exc
 
 
 def _prepared_payload(path: str | Path) -> dict[str, Any]:
     try:
         payload = json.loads(Path(path).read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise OpenRouterError(f"Не удалось прочитать подготовленный JSON для OpenRouter: {path}") from exc
+        raise OpenRouterError(f"Не удалось прочитать подготовленный JSON для AI-анализа: {path}") from exc
     if not isinstance(payload, dict) or not isinstance(payload.get("conversations"), list):
         raise OpenRouterError(f"Подготовленный JSON имеет неверную структуру: {path}")
     return payload
@@ -277,6 +287,9 @@ def _synthesis_result(
     dataset_fingerprint: str,
     period_membership: dict[str, set[str]] | None = None,
     period_payloads: dict[str, dict[str, Any]] | None = None,
+    *,
+    base_url: str = OPENROUTER_URL,
+    provider_label: str = OPENROUTER_LABEL,
 ) -> dict[str, Any]:
     category_counts = Counter(item["category"] for item in classifications)
     severity_counts = Counter(item["severity"] or "unknown" for item in classifications)
@@ -323,13 +336,15 @@ def _synthesis_result(
         model,
         "Ты готовишь итоговый синтез уже проверенных пакетов классификации. Не меняй категории и не создавай классификации. " + instructions + " Схема: " + schema,
         json.dumps(input_data, ensure_ascii=False, separators=(",", ":")),
+        base_url=base_url,
+        provider_label=provider_label,
     )
     summary = synthesis.get("executive_summary")
     recommendations = synthesis.get("recommendations")
     if not isinstance(summary, str) or not summary.strip():
-        raise OpenRouterError("Итоговый синтез OpenRouter не содержит executive_summary.")
+        raise OpenRouterError(f"Итоговый синтез {provider_label} не содержит executive_summary.")
     if not isinstance(recommendations, list) or any(not isinstance(item, str) or not item.strip() for item in recommendations):
-        raise OpenRouterError("Итоговый синтез OpenRouter вернул некорректный recommendations.")
+        raise OpenRouterError(f"Итоговый синтез {provider_label} вернул некорректный recommendations.")
     merged = {
         "complete": True,
         "conversation_count": len(classifications),
@@ -343,19 +358,19 @@ def _synthesis_result(
         merged["period_analysis"] = {}
         period_summaries = synthesis.get("period_analysis")
         if not isinstance(period_summaries, dict):
-            raise OpenRouterError("Итоговый синтез OpenRouter не содержит period_analysis.")
+            raise OpenRouterError(f"Итоговый синтез {provider_label} не содержит period_analysis.")
         for name, payload in period_payloads.items():
             details = period_summaries.get(name)
             if not isinstance(details, dict):
-                raise OpenRouterError(f"Итоговый синтез OpenRouter не содержит период {name}.")
+                raise OpenRouterError(f"Итоговый синтез {provider_label} не содержит период {name}.")
             period_summary = details.get("executive_summary")
             period_recommendations = details.get("recommendations")
             if not isinstance(period_summary, str) or not period_summary.strip():
-                raise OpenRouterError(f"Итоговый синтез OpenRouter не содержит резюме периода {name}.")
+                raise OpenRouterError(f"Итоговый синтез {provider_label} не содержит резюме периода {name}.")
             if not isinstance(period_recommendations, list) or any(
                 not isinstance(item, str) or not item.strip() for item in period_recommendations
             ):
-                raise OpenRouterError(f"Итоговый синтез OpenRouter вернул некорректные рекомендации периода {name}.")
+                raise OpenRouterError(f"Итоговый синтез {provider_label} вернул некорректные рекомендации периода {name}.")
             merged["period_analysis"][name] = {
                 "conversation_count": payload["conversation_count"],
                 "dataset_fingerprint": payload["dataset_fingerprint"],
@@ -375,6 +390,8 @@ def _classify_batches(
     period_payloads: dict[str, dict[str, Any]] | None = None,
     workers: int = DEFAULT_OPENROUTER_WORKERS,
     checkpoint_dir: str | Path | None = None,
+    base_url: str = OPENROUTER_URL,
+    provider_label: str = OPENROUTER_LABEL,
 ) -> dict[str, Any]:
     rows_by_id = {str(row["id"]): row for row in source_rows}
     conversations_by_id = {str(row["id"]): row for row in conversations}
@@ -400,7 +417,7 @@ def _classify_batches(
         cache_path = None
         if checkpoint_dir is not None:
             cache_key = hashlib.sha256(json.dumps(
-                {"model": model, "prompt": prompt, "user_content": user_content},
+                {"model": model, "provider": provider_label, "prompt": prompt, "user_content": user_content},
                 ensure_ascii=False, sort_keys=True, separators=(",", ":"),
             ).encode("utf-8")).hexdigest()
             cache_path = Path(checkpoint_dir) / f"batch_{cache_key}.json"
@@ -446,8 +463,11 @@ def _classify_batches(
                     + json.dumps(allowed_ids, ensure_ascii=False)
                     + " Верни полный JSON в той же схеме, без пояснений."
                 )
-                print(f"OpenRouter: повтор пакета {index}/{len(batches)} после ошибки проверки")
-            response_result = _request_result(api_key, model, current_prompt, user_content)
+                print(f"{provider_label}: повтор пакета {index}/{len(batches)} после ошибки проверки")
+            response_result = _request_result(
+                api_key, model, current_prompt, user_content,
+                base_url=base_url, provider_label=provider_label,
+            )
             try:
                 result, classifications = validate_batch_result(response_result)
                 break
@@ -469,7 +489,7 @@ def _classify_batches(
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
             future_indices = {}
             for index, batch in enumerate(batches, start=1):
-                print(f"OpenRouter: отправка пакета {index}/{len(batches)} ({len(batch)} обращений, {sum(_conversation_bytes(item) for item in batch)} байт)")
+                print(f"{provider_label}: отправка пакета {index}/{len(batches)} ({len(batch)} обращений, {sum(_conversation_bytes(item) for item in batch)} байт)")
                 future = executor.submit(process_batch, index, batch)
                 future_indices[future] = index - 1
             for future in as_completed(future_indices):
@@ -479,7 +499,7 @@ def _classify_batches(
                 batch_classifications[index] = classifications
                 completed += 1
                 label = "из кэша" if cached else "проверен"
-                print(f"OpenRouter: готово пакетов {completed}/{len(batches)} ({label})")
+                print(f"{provider_label}: готово пакетов {completed}/{len(batches)} ({label})")
 
     final_batch_results = [item for item in batch_results if item is not None]
     final_batch_classifications = [item for item in batch_classifications if item is not None]
@@ -497,10 +517,11 @@ def _classify_batches(
             "classifications": classifications,
         })
     else:
-        print(f"OpenRouter: объединение {len(batches)} пакетов и синтез общих выводов")
+        print(f"{provider_label}: объединение {len(batches)} пакетов и синтез общих выводов")
         final_result = _synthesis_result(
             api_key, model, final_batch_results, classifications, categories,
             input_payload["dataset_fingerprint"], period_membership, period_payloads,
+            base_url=base_url, provider_label=provider_label,
         )
     if period_membership is not None and period_payloads is not None:
         _validate_period_analysis(final_result, period_payloads["week"], period_payloads["day"])
@@ -513,6 +534,9 @@ def run_standard_analysis(
     api_key: str,
     model: str,
     workers: int = DEFAULT_OPENROUTER_WORKERS,
+    *,
+    base_url: str = OPENROUTER_URL,
+    provider_label: str = OPENROUTER_LABEL,
 ) -> dict[str, Any]:
     output = Path(output_dir)
     prepared = _prepared_payload(output / "chatgpt_input.json")
@@ -520,6 +544,7 @@ def run_standard_analysis(
     result = _classify_batches(
         source_rows, prepared["conversations"], api_key, model,
         workers=workers, checkpoint_dir=output / ".openrouter-cache",
+        base_url=base_url, provider_label=provider_label,
     )
     result_path = output / "chatgpt_result.json"
     _write_json(result_path, result)
@@ -527,7 +552,7 @@ def run_standard_analysis(
         report = generate_report(source_path, result_path, output)
     except AnalysisError as exc:
         raise OpenRouterError(
-            f"Ответ OpenRouter не прошел проверку полноты или схемы: {exc}. "
+            f"Ответ {provider_label} не прошел проверку полноты или схемы: {exc}. "
             "Ручные файлы анализа сохранены."
         ) from exc
     return {**report, "result_path": str(result_path)}
@@ -540,6 +565,9 @@ def run_monitoring_analysis(
     api_key: str,
     model: str,
     workers: int = DEFAULT_OPENROUTER_WORKERS,
+    *,
+    base_url: str = OPENROUTER_URL,
+    provider_label: str = OPENROUTER_LABEL,
 ) -> dict[str, Any]:
     output = Path(output_dir)
     week_payload = _prepared_payload(output / "chatgpt_input_week.json")
@@ -572,6 +600,8 @@ def run_monitoring_analysis(
         period_payloads=period_payloads,
         workers=workers,
         checkpoint_dir=output / ".openrouter-cache",
+        base_url=base_url,
+        provider_label=provider_label,
     )
     result_path = output / "chatgpt_result.json"
     _write_json(result_path, result)
@@ -579,7 +609,7 @@ def run_monitoring_analysis(
         report = generate_monitoring_report(week_path, day_path, result_path, output)
     except AnalysisError as exc:
         raise OpenRouterError(
-            f"Ответ OpenRouter не прошел проверку полноты или схемы: {exc}. "
+            f"Ответ {provider_label} не прошел проверку полноты или схемы: {exc}. "
             "Ручные файлы анализа сохранены."
         ) from exc
     return {**report, "result_path": str(result_path)}
