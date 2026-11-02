@@ -8,7 +8,7 @@ from .config import load_config
 from .dates import default_range, parse_date_range
 from .exporter import ConversationExporter, format_duration, resolve_timezone
 from .monitoring import build_monitoring_windows, run_monitoring
-from .openrouter import OpenRouterError, run_monitoring_analysis, run_standard_analysis
+from .openrouter import DAHL_URL, OPENROUTER_URL, OpenRouterError, run_monitoring_analysis, run_standard_analysis
 from .support_analysis import AnalysisError, prepare_analysis, prepare_monitoring_analysis
 
 
@@ -50,8 +50,30 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true", help="Показать период и базовое имя каталога без запросов к API")
     parser.add_argument("--skip-analysis", action="store_true",
                         help="Отключить подготовку файлов и автоматический AI-анализ после экспорта")
+    parser.add_argument("--analyze", choices=("openrouter", "dahl"),
+                        help="Автоматический AI-анализ после экспорта через выбранный провайдер (без флага — только подготовка файлов для ручного анализа)")
     parser.add_argument("--verbose", action="store_true", help="Подробное логирование без содержимого переписок")
     return parser
+
+
+def _analysis_kwargs(args, config, parser) -> dict | None:
+    """Настройки автоанализа или None, если анализ не запрошен."""
+    if args.skip_analysis or not args.analyze:
+        return None
+    if args.analyze == "openrouter":
+        api_key = getattr(config, "openrouter_api_key", None)
+        model = getattr(config, "openrouter_model", "anthropic/claude-sonnet-4.5")
+        workers = getattr(config, "openrouter_workers", 3)
+        base_url, label, missing = OPENROUTER_URL, "OpenRouter", "OPENROUTER_API_KEY"
+    else:
+        api_key = getattr(config, "dahl_api_key", None)
+        model = getattr(config, "dahl_model", "MiniMaxAI/MiniMax-M2.7")
+        workers = getattr(config, "dahl_workers", 3)
+        base_url, label, missing = DAHL_URL, "Dahl", "DAHL_API_KEY"
+    if not api_key:
+        parser.error(f"--analyze {args.analyze}: не задан {missing} в .env")
+    return {"api_key": api_key, "model": model, "workers": workers,
+            "base_url": base_url, "provider_label": label}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -99,6 +121,7 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    analysis_kwargs = _analysis_kwargs(args, config, parser)
     client = IntercomClient(config.access_token, config.api_version)
     exporter = ConversationExporter(client, max_workers=args.workers)
     if not args.standard:
@@ -126,27 +149,29 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{label}: {snapshot['conversation_count']} обращений. Каталог: {snapshot['output_dir']}")
         if result["analysis"]:
             print(f"Общие файлы для анализа обоих периодов: {result['analysis']['output_dir']}")
-            if getattr(config, "openrouter_api_key", None):
-                print("Выполняется анализ через OpenRouter...")
+            if analysis_kwargs:
+                print(f"Выполняется анализ через {analysis_kwargs['provider_label']}...")
                 try:
                     ai_result = run_monitoring_analysis(
                         Path(result["snapshots"]["last_week"]["output_dir"]) / "conversations.json",
                         Path(result["snapshots"]["last_day"]["output_dir"]) / "conversations.json",
                         result["analysis"]["output_dir"],
-                        config.openrouter_api_key,
-                        getattr(config, "openrouter_model", "anthropic/claude-sonnet-4.5"),
-                        getattr(config, "openrouter_workers", 3),
+                        analysis_kwargs["api_key"],
+                        analysis_kwargs["model"],
+                        analysis_kwargs["workers"],
+                        base_url=analysis_kwargs["base_url"],
+                        provider_label=analysis_kwargs["provider_label"],
                     )
                 except OpenRouterError as exc:
                     logging.error("Автоматический анализ не выполнен: %s", exc)
                     logging.error("Входные файлы и PROMPT.md доступны: %s", result["analysis"]["output_dir"])
                     return 1
                 print(
-                    f"Анализ завершён через OpenRouter. Результат: {ai_result['result_path']}; "
+                    f"Анализ завершён через {analysis_kwargs['provider_label']}. Результат: {ai_result['result_path']}; "
                     f"отчёт: {ai_result['report_path']}; CSV: {ai_result['classifications_path']}"
                 )
             else:
-                print("OPENROUTER_API_KEY не задан; подготовлены файлы для ручного анализа в ChatGPT.")
+                print("Автоматический анализ отключён (включить: --analyze openrouter|dahl); подготовлены файлы для ручного анализа в ChatGPT.")
         if args.skip_analysis:
             print("Подготовка данных для ChatGPT отключена параметром --skip-analysis.")
         return 0 if export_result["status"] == "success" else 1
@@ -171,24 +196,26 @@ def main(argv: list[str] | None = None) -> int:
             logging.error("Не удалось подготовить данные для ChatGPT: %s", exc)
             return 1
         print(f"Данные подготовлены. Обращений: {analysis['conversation_count']}. Файлы: {analysis['output_dir']}")
-        if getattr(config, "openrouter_api_key", None):
-            print("Выполняется анализ через OpenRouter...")
+        if analysis_kwargs:
+            print(f"Выполняется анализ через {analysis_kwargs['provider_label']}...")
             try:
                 ai_result = run_standard_analysis(
-                    input_path, analysis["output_dir"], config.openrouter_api_key,
-                    getattr(config, "openrouter_model", "anthropic/claude-sonnet-4.5"),
-                    getattr(config, "openrouter_workers", 3),
+                    input_path, analysis["output_dir"], analysis_kwargs["api_key"],
+                    analysis_kwargs["model"],
+                    analysis_kwargs["workers"],
+                    base_url=analysis_kwargs["base_url"],
+                    provider_label=analysis_kwargs["provider_label"],
                 )
             except OpenRouterError as exc:
                 logging.error("Автоматический анализ не выполнен: %s", exc)
                 logging.error("Входной JSON и PROMPT.md доступны: %s", analysis["output_dir"])
                 return 1
             print(
-                f"Анализ завершён через OpenRouter. Результат: {ai_result['result_path']}; "
+                f"Анализ завершён через {analysis_kwargs['provider_label']}. Результат: {ai_result['result_path']}; "
                 f"отчёт: {ai_result['report_path']}; CSV: {ai_result['classifications_path']}"
             )
         else:
-            print("OPENROUTER_API_KEY не задан; подготовлены файлы для ручного анализа в ChatGPT.")
+            print("Автоматический анализ отключён (включить: --analyze openrouter|dahl); подготовлены файлы для ручного анализа в ChatGPT.")
     elif args.skip_analysis:
         print("Подготовка данных для ChatGPT отключена параметром --skip-analysis.")
     else:

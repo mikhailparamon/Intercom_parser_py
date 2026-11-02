@@ -145,11 +145,11 @@ def test_standard_cli_runs_openrouter_after_preparing_inputs_when_key_is_configu
     monkeypatch.setattr(cli, "prepare_analysis", lambda path: {
         "conversation_count": 1, "output_dir": str(output_dir / "support-analysis"),
     })
-    monkeypatch.setattr(cli, "run_standard_analysis", lambda *args: (
+    monkeypatch.setattr(cli, "run_standard_analysis", lambda *args, **kwargs: (
         calls.append(args) or {"result_path": "result", "report_path": "report", "classifications_path": "csv"}
     ))
 
-    assert cli.main(["--standard", "--start", "2026-07-01", "--end", "2026-10-01"]) == 0
+    assert cli.main(["--standard", "--start", "2026-07-01", "--end", "2026-10-01", "--analyze", "openrouter"]) == 0
     assert calls == [(output_dir / "conversations.json", str(output_dir / "support-analysis"), "router-key", "vendor/model", 3)]
     assert "Анализ завершён через OpenRouter" in capsys.readouterr().out
 
@@ -172,11 +172,11 @@ def test_monitoring_cli_runs_one_openrouter_analysis_for_week_and_day(tmp_path, 
         },
         "analysis": {"output_dir": str(analysis_dir)},
     })
-    monkeypatch.setattr(cli, "run_monitoring_analysis", lambda *args: (
+    monkeypatch.setattr(cli, "run_monitoring_analysis", lambda *args, **kwargs: (
         calls.append(args) or {"result_path": "result", "report_path": "report", "classifications_path": "csv"}
     ))
 
-    assert cli.main([]) == 0
+    assert cli.main(["--analyze", "openrouter"]) == 0
 
     assert calls == [(week_dir / "conversations.json", day_dir / "conversations.json", str(analysis_dir), "router-key", "vendor/model", 3)]
     assert "Анализ завершён через OpenRouter" in capsys.readouterr().out
@@ -332,3 +332,80 @@ def test_cli_monitoring_rejects_standard_only_selection_and_fields():
     with pytest.raises(SystemExit) as fields_error:
         cli.main(["--dry-run", "--fields", "important"])
     assert fields_error.value.code == 2
+
+
+def test_cli_without_analyze_flag_skips_auto_analysis_even_with_key(tmp_path, monkeypatch, capsys):
+    from types import SimpleNamespace
+    calls = []
+    monkeypatch.setattr(cli, "load_config", lambda: SimpleNamespace(
+        access_token="token", api_version="2.17", openrouter_api_key="router-key", openrouter_model="m",
+    ))
+    monkeypatch.setattr(cli, "IntercomClient", lambda *args: object())
+    monkeypatch.setattr(cli, "ConversationExporter", lambda *args, **kwargs: object())
+    monkeypatch.setattr(cli, "run_monitoring", lambda *args, **kwargs: {
+        "export": {"status": "success", "found_count": 1, "exported_count": 1, "error_count": 0, "elapsed_seconds": 1},
+        "snapshots": {
+            "last_week": {"conversation_count": 1, "output_dir": str(tmp_path / "week")},
+            "last_day": {"conversation_count": 1, "output_dir": str(tmp_path / "day")},
+        },
+        "analysis": {"output_dir": str(tmp_path / "support-analysis")},
+    })
+    monkeypatch.setattr(cli, "run_monitoring_analysis", lambda *args, **kwargs: calls.append(args))
+
+    assert cli.main([]) == 0
+    assert calls == []
+    assert "ручного анализа" in capsys.readouterr().out
+
+
+def test_cli_analyze_dahl_uses_dahl_settings(tmp_path, monkeypatch, capsys):
+    from types import SimpleNamespace
+    from intercom_exporter.openrouter import DAHL_URL
+    calls = []
+    monkeypatch.setattr(cli, "load_config", lambda: SimpleNamespace(
+        access_token="token", api_version="2.17",
+        dahl_api_key="dahl-key", dahl_model="MiniMaxAI/MiniMax-M2.7", dahl_workers=2,
+    ))
+    monkeypatch.setattr(cli, "IntercomClient", lambda *args: object())
+    monkeypatch.setattr(cli, "ConversationExporter", lambda *args, **kwargs: object())
+    monkeypatch.setattr(cli, "run_monitoring", lambda *args, **kwargs: {
+        "export": {"status": "success", "found_count": 1, "exported_count": 1, "error_count": 0, "elapsed_seconds": 1},
+        "snapshots": {
+            "last_week": {"conversation_count": 1, "output_dir": str(tmp_path / "week")},
+            "last_day": {"conversation_count": 1, "output_dir": str(tmp_path / "day")},
+        },
+        "analysis": {"output_dir": str(tmp_path / "support-analysis")},
+    })
+    monkeypatch.setattr(cli, "run_monitoring_analysis", lambda *args, **kwargs: (
+        calls.append((args, kwargs)) or {"result_path": "r", "report_path": "rep", "classifications_path": "csv"}
+    ))
+
+    assert cli.main(["--analyze", "dahl"]) == 0
+    positional, keyword = calls[0]
+    assert positional[3] == "dahl-key"
+    assert positional[4] == "MiniMaxAI/MiniMax-M2.7"
+    assert positional[5] == 2
+    assert keyword["base_url"] == DAHL_URL
+    assert keyword["provider_label"] == "Dahl"
+    assert "Dahl" in capsys.readouterr().out
+
+
+def test_cli_analyze_without_provider_key_is_rejected(tmp_path, monkeypatch, capsys):
+    from types import SimpleNamespace
+    monkeypatch.setattr(cli, "load_config", lambda: SimpleNamespace(
+        access_token="token", api_version="2.17",
+    ))
+    monkeypatch.setattr(cli, "IntercomClient", lambda *args: object())
+    monkeypatch.setattr(cli, "ConversationExporter", lambda *args, **kwargs: object())
+    monkeypatch.setattr(cli, "run_monitoring", lambda *args, **kwargs: {
+        "export": {"status": "success", "found_count": 1, "exported_count": 1, "error_count": 0, "elapsed_seconds": 1},
+        "snapshots": {
+            "last_week": {"conversation_count": 1, "output_dir": str(tmp_path / "week")},
+            "last_day": {"conversation_count": 1, "output_dir": str(tmp_path / "day")},
+        },
+        "analysis": {"output_dir": str(tmp_path / "support-analysis")},
+    })
+
+    with pytest.raises(SystemExit) as error:
+        cli.main(["--analyze", "dahl"])
+    assert error.value.code == 2
+    assert "DAHL_API_KEY" in capsys.readouterr().err
