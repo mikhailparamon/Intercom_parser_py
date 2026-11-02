@@ -571,6 +571,7 @@ def generate_monitoring_report(
     day_input_path: str | Path,
     result_path: str | Path,
     output_dir: str | Path | None = None,
+    dashboard_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     week_path, day_path = Path(week_input_path), Path(day_input_path)
     week_rows = _read_conversations(week_path, allow_empty=True)
@@ -589,11 +590,13 @@ def generate_monitoring_report(
     classifications_by_id = {item["id"]: item for item in classifications}
     week_classifications = [classifications_by_id[item] for item in classifications_by_id if item in week_ids]
     day_classifications = [classifications_by_id[item] for item in classifications_by_id if item in day_ids]
+    week_label = _period_label(week_path) or "Последние 7 дней"
+    day_label = _period_label(day_path) or "Последний день"
     week_markdown, week_counts, _ = _markdown_report(
-        week_rows, categories, week_classifications, period_analysis["week"], _period_label(week_path) or "Последние 7 дней",
+        week_rows, categories, week_classifications, period_analysis["week"], week_label,
     )
     day_markdown, day_counts, _ = _markdown_report(
-        day_rows, categories, day_classifications, period_analysis["day"], _period_label(day_path) or "Последний день",
+        day_rows, categories, day_classifications, period_analysis["day"], day_label,
     )
     week_markdown = week_markdown.split("\n", 1)[-1].lstrip()
     day_markdown = day_markdown.split("\n", 1)[-1].lstrip()
@@ -625,6 +628,10 @@ def generate_monitoring_report(
     _write_text(report_path, report_markdown)
     csv_path = output / "classifications.csv"
     _write_classifications_csv(csv_path, classifications, {"week": week_ids, "day": day_ids})
+    from .dashboard import build_dashboard_data, write_dashboard
+
+    dashboard_data = build_dashboard_data(week_rows, day_rows, categories, classifications, week_label, day_label)
+    dashboard_path = write_dashboard(dashboard_data, Path(dashboard_dir) if dashboard_dir else output)
     return {
         "unique_conversation_count": len(union_rows),
         "week_conversation_count": len(week_rows),
@@ -632,6 +639,7 @@ def generate_monitoring_report(
         "overlap_count": len(week_ids & day_ids),
         "report_path": str(report_path),
         "classifications_path": str(csv_path),
+        "dashboard_path": str(dashboard_path),
     }
 
 
@@ -658,6 +666,7 @@ def build_parser() -> argparse.ArgumentParser:
     monitor_report.add_argument("--day", required=True, help="Исходный conversations.json дневного окна")
     monitor_report.add_argument("--result", required=True, help="Единый chatgpt_result.json")
     monitor_report.add_argument("--output", help="Общий каталог для report.md и classifications.csv")
+    monitor_report.add_argument("--dashboard-dir", help="Каталог для dashboard.html (по умолчанию: общий каталог отчёта)")
     return parser
 
 
@@ -728,8 +737,11 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 print("Автоматический анализ отключён (включить: --analyze openrouter|dahl); JSON-файлы и PROMPT.md готовы для ручного анализа.")
         else:
-            result = generate_monitoring_report(args.week, args.day, args.result, args.output)
-            print(f"Единый отчёт сохранён: {result['report_path']}. Разметка: {result['classifications_path']}")
+            result = generate_monitoring_report(args.week, args.day, args.result, args.output, args.dashboard_dir)
+            print(
+                f"Единый отчёт сохранён: {result['report_path']}. Разметка: {result['classifications_path']}. "
+                f"Дашборд: {result['dashboard_path']}"
+            )
     except AnalysisError as exc:
         print(f"Ошибка анализа: {exc}")
         return 1

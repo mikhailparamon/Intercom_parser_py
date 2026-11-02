@@ -1,4 +1,7 @@
+import json
+
 from intercom_exporter.dashboard import build_dashboard_data, render_dashboard_html, write_dashboard
+from intercom_exporter.support_analysis import _build_payload, generate_monitoring_report
 
 CATEGORIES = [
     {"name": "Подключение VPN", "description": "Проблемы с подключением"},
@@ -114,3 +117,64 @@ def test_render_dashboard_html_escapes_script_closing_tag():
     classifications = [_classification("a", "X</script>", "sub", None)]
     html = render_dashboard_html(build_dashboard_data(rows, rows, categories, classifications, "w", "d"))
     assert "X<\\/script>" in html
+
+
+
+def _write_window(directory, rows):
+    directory.mkdir(parents=True)
+    (directory / "conversations.json").write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
+    (directory / "manifest.json").write_text(
+        json.dumps({"start": "2026-10-26", "end_exclusive": "2026-11-02"}), encoding="utf-8")
+    return directory / "conversations.json"
+
+
+def _monitoring_result(week_rows, day_rows):
+    union_payload = _build_payload(week_rows)  # day_rows ⊂ week_rows по id
+    return {
+        "complete": True,
+        "conversation_count": len(week_rows),
+        "dataset_fingerprint": union_payload["dataset_fingerprint"],
+        "categories": CATEGORIES,
+        "classifications": _classifications(),
+        "executive_summary": "Сводка",
+        "recommendations": ["Рекомендация"],
+        "period_analysis": {
+            "week": {"conversation_count": len(week_rows), "dataset_fingerprint": union_payload["dataset_fingerprint"],
+                     "executive_summary": "Неделя", "recommendations": ["..."]},
+            "day": {"conversation_count": len(day_rows), "dataset_fingerprint": _build_payload(day_rows)["dataset_fingerprint"],
+                    "executive_summary": "День", "recommendations": ["..."]},
+        },
+    }
+
+
+def test_generate_monitoring_report_writes_dashboard(tmp_path):
+    week_rows = _week_rows()
+    day_rows = _day_rows()
+    week_path = _write_window(tmp_path / "run" / "last_week", week_rows)
+    day_path = _write_window(tmp_path / "run" / "last_day", day_rows)
+    result_path = tmp_path / "result.json"
+    result_path.write_text(json.dumps(_monitoring_result(week_rows, day_rows), ensure_ascii=False), encoding="utf-8")
+    dashboard_dir = tmp_path / "dashboard"
+
+    outcome = generate_monitoring_report(week_path, day_path, result_path, dashboard_dir=dashboard_dir)
+
+    dashboard_path = dashboard_dir / "dashboard.html"
+    assert dashboard_path.is_file()
+    assert outcome["dashboard_path"] == str(dashboard_path)
+    html = dashboard_path.read_text(encoding="utf-8")
+    assert '"week_total":3' in html.replace(" ", "")
+
+
+def test_generate_monitoring_report_defaults_dashboard_next_to_report(tmp_path):
+    week_rows = _week_rows()
+    day_rows = _day_rows()
+    week_path = _write_window(tmp_path / "run" / "last_week", week_rows)
+    day_path = _write_window(tmp_path / "run" / "last_day", day_rows)
+    result_path = tmp_path / "result.json"
+    result_path.write_text(json.dumps(_monitoring_result(week_rows, day_rows), ensure_ascii=False), encoding="utf-8")
+
+    outcome = generate_monitoring_report(week_path, day_path, result_path)
+
+    expected = tmp_path / "run" / "support-analysis" / "dashboard.html"
+    assert expected.is_file()
+    assert outcome["dashboard_path"] == str(expected)
