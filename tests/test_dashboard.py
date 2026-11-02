@@ -178,3 +178,15 @@ def test_generate_monitoring_report_defaults_dashboard_next_to_report(tmp_path):
     expected = tmp_path / "run" / "support-analysis" / "dashboard.html"
     assert expected.is_file()
     assert outcome["dashboard_path"] == str(expected)
+
+
+def test_build_dashboard_data_includes_categories_and_recommendations():
+    data = build_dashboard_data(_week_rows(), _day_rows(), CATEGORIES, _classifications(), "w", "d",
+                                {"overall": ["O1"], "week": ["W1", "W2"], "day": []})
+    assert data["categories"] == [{"name": c["name"], "description": c["description"]} for c in CATEGORIES]
+    assert data["recommendations"] == {"overall": ["O1"], "week": ["W1", "W2"], "day": []}
+
+
+def test_build_dashboard_data_defaults_empty_recommendations():
+    data = build_dashboard_data(_week_rows(), _day_rows(), CATEGORIES, _classifications(), "w", "d")
+    assert data["recommendations"] == {"overall": [], "week": [], "day": []}

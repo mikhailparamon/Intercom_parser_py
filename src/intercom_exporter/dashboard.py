@@ -72,11 +72,15 @@ def build_dashboard_data(
     classifications: list[dict],
     week_period: str,
     day_period: str,
+    recommendations: dict | None = None,
 ) -> dict:
     """Собирает все агрегаты дашборда из провалидированных данных report-monitoring.
 
-    Параметр ``categories`` принимается для совместимости интерфейса с пайплайном
-    отчёта и зарезервирован на будущее — в агрегации он не используется.
+    Параметр ``categories`` (элементы с ключами ``name`` и ``description``) попадает
+    в данные дашборда как расшифровка категорий.
+
+    Параметр ``recommendations`` — необязательный словарь со списками строк по ключам
+    ``overall``, ``week``, ``day`` (рекомендации из результата анализа).
 
     Элементы ``classifications`` должны быть предварительно провалидированы пайплайном
     отчёта и содержать ключи ``id``, ``category``, ``subcategory``, ``problem_summary``,
@@ -122,6 +126,11 @@ def build_dashboard_data(
         "subcategories": subcategories,
         "severity": {"week": severity_week, "day": _severity_breakdown(day_classifications)},
         "high_cases": high_cases,
+        "categories": [{"name": item["name"], "description": item["description"]} for item in categories],
+        "recommendations": {
+            key: list((recommendations or {}).get(key) or [])
+            for key in ("overall", "week", "day")
+        },
         "palette": PALETTE,
     }
 
@@ -182,6 +191,18 @@ footer{margin-top:20px;color:var(--muted);font-size:12px;text-align:center}
     <div class="card"><h2>Тяжесть обращений</h2><div id="severity"></div></div>
   </div>
   <div class="card" style="margin-top:14px"><h2>Обращения высокой тяжести (неделя)</h2><div id="high"></div></div>
+  <div class="card" style="margin-top:14px"><h2>Рекомендации</h2><div id="recommendations"></div></div>
+  <div class="card" style="margin-top:14px"><h2>Расшифровка категорий</h2><div id="categories"></div></div>
+  <div class="card" style="margin-top:14px"><h2>Что такое тяжесть</h2>
+    <table>
+      <tr><th>Уровень</th><th>Значение</th></tr>
+      <tr><td>Высокая (high)</td><td>Явно подтверждённое существенное длительное нарушение критичного сценария с описанным влиянием на клиента.</td></tr>
+      <tr><td>Средняя (medium)</td><td>Прямо описанная невозможность использовать значимую функцию, заметные перебои или повторяющиеся нарушения.</td></tr>
+      <tr><td>Низкая (low)</td><td>Вопрос, настройка, небольшое неудобство без серьёзного заявленного эффекта.</td></tr>
+      <tr><td>Не оценена</td><td>В тексте обращения недостаточно данных о влиянии на клиента.</td></tr>
+    </table>
+    <p style="margin-top:10px;font-size:12px;color:var(--muted)">Тяжесть — качественная оценка по тексту обращений: учитывается только влияние, описанное самим клиентом. Она не измеряет число затронутых клиентов, финансовый ущерб или технический масштаб проблемы.</p>
+  </div>
   <footer>Сгенерировано автоматически: analyze_support.py report-monitoring</footer>
 </div>
 <script>
@@ -261,6 +282,25 @@ donut("donut-day", "legend-day", DATA.day_categories);
   if (!DATA.high_cases.length) { el.textContent = "Обращений высокой тяжести нет."; return; }
   el.innerHTML = "<table><tr><th>ID</th><th>Категория</th><th>Подкатегория</th><th>Суть проблемы</th></tr>" +
     DATA.high_cases.map(c => `<tr><td>${esc(c.id)}</td><td>${esc(c.category)}</td><td>${esc(c.subcategory)}</td><td>${esc(c.problem_summary)}</td></tr>`).join("") + "</table>";
+})();
+
+(function () {
+  const groups = [["week", "Неделя"], ["day", "День"], ["overall", "Общие"]];
+  const el = document.getElementById("recommendations");
+  const html = groups.map(([key, title]) => {
+    const items = DATA.recommendations[key] || [];
+    if (!items.length) return "";
+    return `<h3 style="font-size:13px;margin:8px 0 4px">${title}</h3><ul style="padding-left:18px;font-size:13px">` +
+      items.map(r => `<li style="margin:3px 0">${esc(r)}</li>`).join("") + "</ul>";
+  }).join("");
+  el.innerHTML = html || "Рекомендации не сформированы.";
+})();
+
+(function () {
+  const el = document.getElementById("categories");
+  if (!DATA.categories.length) { el.textContent = "Нет данных о категориях."; return; }
+  el.innerHTML = "<table><tr><th>Категория</th><th>Описание</th></tr>" +
+    DATA.categories.map(c => `<tr><td>${esc(c.name)}</td><td>${esc(c.description)}</td></tr>`).join("") + "</table>";
 })();
 </script>
 </body>

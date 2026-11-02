@@ -631,7 +631,14 @@ def generate_monitoring_report(
     # Ленивый импорт: dashboard импортирует _write_text из этого модуля — импорт наверху дал бы цикл.
     from .dashboard import build_dashboard_data, write_dashboard
 
-    dashboard_data = build_dashboard_data(week_rows, day_rows, categories, classifications, week_label, day_label)
+    dashboard_data = build_dashboard_data(
+        week_rows, day_rows, categories, classifications, week_label, day_label,
+        {
+            "overall": result["recommendations"],
+            "week": period_analysis["week"]["recommendations"],
+            "day": period_analysis["day"]["recommendations"],
+        },
+    )
     dashboard_path = write_dashboard(dashboard_data, Path(dashboard_dir) if dashboard_dir else output)
     return {
         "unique_conversation_count": len(union_rows),
