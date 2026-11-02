@@ -190,3 +190,41 @@ def test_prepare_agents_bundle_generates_prompt(tmp_path):
     assert prompt_path.is_file()
     assert manifest["prompt_path"] == str(prompt_path)
     assert "таксоном" in prompt_path.read_text(encoding="utf-8").lower()
+
+
+def test_cli_prepare_monitoring_creates_agents_bundle_by_default(tmp_path, capsys):
+    from intercom_exporter.support_analysis import main
+
+    week = _write_conversations(tmp_path / "run" / "last_week", ["a", "b", "c"])
+    day = _write_conversations(tmp_path / "run" / "last_day", ["a"])
+    code = main(["prepare-monitoring", "--week", str(week), "--day", str(day)])
+    assert code == 0
+    bundle = tmp_path / "run" / "support-analysis" / "agents_work"
+    assert (bundle / "manifest.json").is_file()
+    assert (bundle / "agents_protocol.md").is_file()
+    assert "оркестрац" in capsys.readouterr().out.lower()
+
+
+def test_cli_prepare_monitoring_agents_disabled_with_flag(tmp_path):
+    from intercom_exporter.support_analysis import main
+
+    week = _write_conversations(tmp_path / "run" / "last_week", ["a"])
+    day = _write_conversations(tmp_path / "run" / "last_day", ["a"])
+    code = main(["prepare-monitoring", "--week", str(week), "--day", str(day), "--no-agents"])
+    assert code == 0
+    assert not (tmp_path / "run" / "support-analysis" / "agents_work").exists()
+
+
+def test_cli_merge_agents(tmp_path, capsys):
+    from intercom_exporter.support_analysis import main
+
+    week = _write_conversations(tmp_path / "run" / "last_week", ["a"])
+    day = _write_conversations(tmp_path / "run" / "last_day", ["a"])
+    out = tmp_path / "run" / "support-analysis"
+    manifest = prepare_agents_bundle(week, day, out, workers=2)
+    _fill_results(manifest, category=None)
+
+    code = main(["merge-agents", "--week", str(week), "--day", str(day)])
+    assert code == 0
+    assert "Дашборд" in capsys.readouterr().out
+    assert (out / "dashboard.html").is_file()

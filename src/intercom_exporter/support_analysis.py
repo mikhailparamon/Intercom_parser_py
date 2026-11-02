@@ -669,12 +669,21 @@ def build_parser() -> argparse.ArgumentParser:
     monitor_prepare.add_argument("--output", help="Общий каталог с двумя входными файлами и PROMPT.md")
     monitor_prepare.add_argument("--analyze", choices=("openrouter", "dahl"),
                                  help="Автоматический AI-анализ через выбранный провайдер (без флага — только подготовка файлов для ручного анализа)")
+    monitor_prepare.add_argument("--workers", type=int, default=10,
+                                 help="Число параллельных субагентов для пакета оркестрации (2–20, по умолчанию 10)")
+    monitor_prepare.add_argument("--no-agents", action="store_true",
+                                 help="Не создавать пакет оркестрации субагентов (только PROMPT.md и входные JSON)")
     monitor_report = subparsers.add_parser("report-monitoring", help="Проверить общий результат и построить единый отчёт по двум окнам")
     monitor_report.add_argument("--week", required=True, help="Исходный conversations.json недельного окна")
     monitor_report.add_argument("--day", required=True, help="Исходный conversations.json дневного окна")
     monitor_report.add_argument("--result", required=True, help="Единый chatgpt_result.json")
     monitor_report.add_argument("--output", help="Общий каталог для report.md и classifications.csv")
     monitor_report.add_argument("--dashboard-dir", help="Каталог для dashboard.html (по умолчанию: общий каталог отчёта)")
+    merge = subparsers.add_parser("merge-agents", help="Слить результаты субагентов, проверить и построить отчёт с дашбордом")
+    merge.add_argument("--week", required=True, help="Исходный conversations.json недельного окна")
+    merge.add_argument("--day", required=True, help="Исходный conversations.json дневного окна")
+    merge.add_argument("--output", help="Каталог анализа (по умолчанию: support-analysis рядом с данными)")
+    merge.add_argument("--compare-with", help="Прошлый chatgpt_result.json для отчёта сравнения")
     return parser
 
 
@@ -732,6 +741,15 @@ def main(argv: list[str] | None = None) -> int:
                 f"({result['day_conversation_count']}), уникальных ID: {result['unique_conversation_count']}. "
                 f"Один PROMPT.md и оба входных JSON: {result['output_dir']}"
             )
+            if not args.no_agents:
+                from .agents_orchestration import prepare_agents_bundle
+
+                bundle = prepare_agents_bundle(args.week, args.day, result["output_dir"], workers=args.workers)
+                print(
+                    f"Пакет оркестрации субагентов готов: {bundle['workers']} чанков, "
+                    f"таксономия: {bundle['taxonomy_source']}. Манифест: {bundle['work_dir']}/manifest.json. "
+                    "Запустите субагентов по протоколу agents_protocol.md, затем: merge-agents --week ... --day ..."
+                )
             analysis = _analysis_kwargs(args, parser)
             if analysis:
                 from .openrouter import run_monitoring_analysis
@@ -744,6 +762,23 @@ def main(argv: list[str] | None = None) -> int:
                 )
             else:
                 print("Автоматический анализ отключён (включить: --analyze openrouter|dahl); JSON-файлы и PROMPT.md готовы для ручного анализа.")
+        elif args.command == "merge-agents":
+            from .agents_orchestration import merge_agents_results
+
+            week_path, day_path = Path(args.week), Path(args.day)
+            if args.output:
+                output = Path(args.output)
+            elif week_path.parent.name == "last_week" and day_path.parent.name == "last_day" and week_path.parent.parent == day_path.parent.parent:
+                output = week_path.parent.parent / "support-analysis"
+            else:
+                output = week_path.parent / "support-analysis"
+            result = merge_agents_results(week_path, day_path, output, compare_with=args.compare_with)
+            print(
+                f"Слито классификаций: {result['unique_conversation_count']}. Результат: {result['result_path']}. "
+                f"Отчёт: {result['report_path']}. Дашборд: {result['dashboard_path']}"
+            )
+            if "comparison_path" in result:
+                print(f"Сравнение с предыдущим прогоном: {result['comparison_path']}")
         else:
             result = generate_monitoring_report(args.week, args.day, args.result, args.output, args.dashboard_dir)
             print(
