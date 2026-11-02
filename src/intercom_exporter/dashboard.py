@@ -77,6 +77,10 @@ def build_dashboard_data(
 
     Параметр ``categories`` принимается для совместимости интерфейса с пайплайном
     отчёта и зарезервирован на будущее — в агрегации он не используется.
+
+    Элементы ``classifications`` должны быть предварительно провалидированы пайплайном
+    отчёта и содержать ключи ``id``, ``category``, ``subcategory``, ``problem_summary``,
+    ``severity`` — ``KeyError`` при отсутствии ключей является осознанным контрактом входа.
     """
     week_ids = {str(row["id"]) for row in week_rows}
     day_ids = {str(row["id"]) for row in day_rows}
@@ -204,7 +208,7 @@ document.getElementById("kpis").innerHTML = kpis.map(([label, value, sub]) =>
   let svg = `<svg viewBox="0 0 ${W} ${H}" width="100%"><polyline points="${pts}" fill="none" stroke="${PAL[0]}" stroke-width="2.5"/>`;
   rows.forEach((r, i) => {
     svg += `<circle cx="${x(i)}" cy="${y(r.count)}" r="4" fill="${PAL[1]}"/>` +
-      `<text x="${x(i)}" y="${y(r.count) - 9}" text-anchor="middle" font-size="12">${r.count}</text>` +
+      `<text x="${x(i)}" y="${y(r.count) - 9}" text-anchor="middle" font-size="12">${r.count ? r.count : ""}</text>` +
       `<text x="${x(i)}" y="${H - P + 16}" text-anchor="middle" font-size="11" fill="#6b7f88">${r.date.slice(5)}</text>`;
   });
   el.innerHTML = svg + "</svg>";
@@ -213,7 +217,7 @@ document.getElementById("kpis").innerHTML = kpis.map(([label, value, sub]) =>
 function donut(elId, legendId, rows) {
   const el = document.getElementById(elId), legend = document.getElementById(legendId);
   const total = rows.reduce((s, r) => s + r.count, 0);
-  if (!total) { el.textContent = "Нет данных"; return; }
+  if (!total) { el.textContent = "Нет данных"; legend.textContent = ""; return; }
   const R = 70, C = 2 * Math.PI * R;
   let offset = 0, arcs = "", legendHtml = "";
   rows.forEach((r, i) => {

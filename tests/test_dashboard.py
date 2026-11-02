@@ -1,4 +1,4 @@
-from intercom_exporter.dashboard import build_dashboard_data
+from intercom_exporter.dashboard import build_dashboard_data, render_dashboard_html, write_dashboard
 
 CATEGORIES = [
     {"name": "Подключение VPN", "description": "Проблемы с подключением"},
@@ -93,9 +93,6 @@ def test_daily_series_falls_back_to_created_at_when_updated_at_unparseable():
     ], "w", "d")
     assert data["daily"][-1] == {"date": "2026-11-02", "count": 1}
     assert data["daily"][-2] == {"date": "2026-11-01", "count": 1}
-
-
-from intercom_exporter.dashboard import render_dashboard_html, write_dashboard
 
 
 def test_write_dashboard_creates_self_contained_offline_html(tmp_path):
