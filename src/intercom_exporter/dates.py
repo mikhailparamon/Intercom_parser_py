@@ -1,4 +1,3 @@
-from calendar import monthrange
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 
@@ -75,14 +74,7 @@ def parse_date_range(start: str | None, end: str | None) -> DateRange:
     return DateRange(parsed_start, parsed_end)
 
 
-def default_range(now: datetime | None = None) -> DateRange:
+def default_range(now: datetime | None = None) -> DateTimeRange:
+    """Скользящая неделя: ровно последние 7 * 24 часа от момента запуска (UTC)."""
     current = now or datetime.now(timezone.utc)
-    current = current.astimezone(timezone.utc) if current.tzinfo else current.replace(tzinfo=timezone.utc)
-    today = current.date()
-    month_index = today.year * 12 + today.month - 1 - 3
-    start_year, start_month_index = divmod(month_index, 12)
-    start_month = start_month_index + 1
-    start_day = min(today.day, monthrange(start_year, start_month)[1])
-    start = date(start_year, start_month, start_day)
-    end = today + timedelta(days=1)
-    return DateRange(start, end)
+    return DateTimeRange(current - timedelta(days=7), current)
