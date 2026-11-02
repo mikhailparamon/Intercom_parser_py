@@ -152,6 +152,9 @@ h1{font-size:24px}
 .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px}
 .card h2{font-size:15px;margin-bottom:12px}
 .legend{display:flex;flex-wrap:wrap;gap:8px;font-size:12px;margin-top:10px}
+.donut-card{display:flex;flex-wrap:wrap;align-items:center}
+.donut-card h2{width:100%}
+.donut-card .legend{flex:1;flex-direction:column;align-items:flex-start;margin-top:0}
 .legend span{display:inline-flex;align-items:center;gap:4px}
 .dot{width:10px;height:10px;border-radius:50%;display:inline-block}
 .bar-row{display:grid;grid-template-columns:minmax(120px,220px) 1fr 48px;gap:8px;align-items:center;font-size:13px;margin:5px 0}
@@ -173,8 +176,8 @@ footer{margin-top:20px;color:var(--muted);font-size:12px;text-align:center}
   <div class="kpis" id="kpis"></div>
   <div class="grid">
     <div class="card"><h2>Обращения по дням (неделя)</h2><div id="chart-daily"></div></div>
-    <div class="card"><h2>Категории — неделя</h2><div id="donut-week"></div><div class="legend" id="legend-week"></div></div>
-    <div class="card"><h2>Категории — день</h2><div id="donut-day"></div><div class="legend" id="legend-day"></div></div>
+    <div class="card donut-card"><h2>Категории — неделя</h2><div id="donut-week"></div><div class="legend" id="legend-week"></div></div>
+    <div class="card donut-card"><h2>Категории — день</h2><div id="donut-day"></div><div class="legend" id="legend-day"></div></div>
     <div class="card"><h2>Топ-10 подкатегорий (неделя)</h2><div id="bars-sub"></div></div>
     <div class="card"><h2>Тяжесть обращений</h2><div id="severity"></div></div>
   </div>
