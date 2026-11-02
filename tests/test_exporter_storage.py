@@ -4,7 +4,7 @@ import time
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from intercom_exporter.dates import DateRange
+from intercom_exporter.dates import DateRange, DateTimeRange
 from intercom_exporter.exporter import ConversationExporter, format_duration
 from intercom_exporter.storage import JsonlStore
 
@@ -448,3 +448,19 @@ def test_important_fields_use_pretty_json_array_and_keep_iso_utc_timestamps(tmp_
     assert text.startswith("[\n")
     assert row["created_at"] == "2026-07-01T00:00:01Z"
     assert "custom_api_field" not in row
+
+
+def test_run_with_datetime_range_names_dir_by_slug_and_writes_exact_manifest(tmp_path):
+    period = DateTimeRange(
+        datetime(2026, 11, 1, 8, tzinfo=timezone.utc),
+        datetime(2026, 11, 2, 8, tzinfo=timezone.utc),
+    )
+    start, _ = period.epoch_bounds()
+    client = FakeClient([candidate("c1", start)], {"c1": detail("c1", [])})
+
+    result = ConversationExporter(client).run(period, tmp_path)
+
+    assert Path(result["output_dir"]).name == "20261101T080000Z_20261102T080000Z"
+    manifest = json.loads((Path(result["output_dir"]) / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["start"] == "2026-11-01T08:00:00+00:00"
+    assert manifest["end_exclusive"] == "2026-11-02T08:00:00+00:00"

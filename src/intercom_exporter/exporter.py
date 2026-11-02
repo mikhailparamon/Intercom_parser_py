@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from .dates import DateRange
+from .dates import DateRange, DateTimeRange
 from .storage import JsonStore
 
 logger = logging.getLogger(__name__)
@@ -39,11 +39,11 @@ class ConversationExporter:
         self.max_workers = max_workers
 
     @staticmethod
-    def _create_output_dir(output_root: str | Path, date_range: DateRange,
+    def _create_output_dir(output_root: str | Path, date_range: DateRange | DateTimeRange,
                            started_at: datetime) -> Path:
         root = Path(output_root)
         root.mkdir(parents=True, exist_ok=True)
-        base_name = f"{date_range.start.isoformat()}_{date_range.end.isoformat()}"
+        base_name = date_range.slug
         output_dir = root / base_name
         try:
             output_dir.mkdir()
@@ -61,7 +61,7 @@ class ConversationExporter:
                     output_dir = root / f"{unique_name}_{suffix:02d}"
                     suffix += 1
 
-    def run(self, date_range: DateRange, output_root: str | Path, *, api_version: str = "unknown",
+    def run(self, date_range: DateRange | DateTimeRange, output_root: str | Path, *, api_version: str = "unknown",
             selection: str = "all", fields: str = "important", timezone_name: str = "UTC") -> dict[str, Any]:
         if selection not in {"new", "updated", "all"}:
             raise ValueError("selection должен быть new, updated или all")
