@@ -254,7 +254,7 @@ def _monitoring_prompt(week: dict, day: dict, combined: dict, week_bytes: int, d
     return f"""# Единый анализ мониторинговых окон
 
 Проанализируй **оба** входных файла: `chatgpt_input_week.json` и `chatgpt_input_day.json`.
-Недельное окно: {week.get('period', 'последние 7 завершённых дней')}; {week['conversation_count']} обращений (fingerprint `{week['dataset_fingerprint']}`, {week_bytes} байт). Дневное окно: {day.get('period', 'последний завершённый день')}; {day['conversation_count']} обращений (fingerprint `{day['dataset_fingerprint']}`, {day_bytes} байт). Совпадают {overlap} ID. Объединение содержит {combined['conversation_count']} уникальных ID (fingerprint `{combined['dataset_fingerprint']}`).
+Недельное окно: {week.get('period', 'последние 7×24 часа')}; {week['conversation_count']} обращений (fingerprint `{week['dataset_fingerprint']}`, {week_bytes} байт). Дневное окно: {day.get('period', 'последние 24 часа')}; {day['conversation_count']} обращений (fingerprint `{day['dataset_fingerprint']}`, {day_bytes} байт). Совпадают {overlap} ID. Объединение содержит {combined['conversation_count']} уникальных ID (fingerprint `{combined['dataset_fingerprint']}`).
 
 ## Правило объединённого анализа
 
@@ -321,8 +321,8 @@ def prepare_monitoring_analysis(
         raise AnalysisError("Недельный и дневной срезы не содержат обращений")
     week_payload = _build_payload(week_rows)
     day_payload = _build_payload(day_rows)
-    week_payload["period"] = _period_label(week_path) or "Последние 7 завершённых дней UTC"
-    day_payload["period"] = _period_label(day_path) or "Последний завершённый день UTC"
+    week_payload["period"] = _period_label(week_path) or "Последние 7×24 часа UTC"
+    day_payload["period"] = _period_label(day_path) or "Последние 24 часа UTC"
     combined_payload = _build_payload(union_rows)
     if output_dir:
         output = Path(output_dir)
