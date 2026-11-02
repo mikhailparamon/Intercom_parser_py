@@ -167,7 +167,6 @@ def test_monitoring_cli_runs_one_openrouter_analysis_for_week_and_day(tmp_path, 
     monkeypatch.setattr(cli, "run_monitoring", lambda *args, **kwargs: {
         "export": {"status": "success", "found_count": 1, "exported_count": 1, "error_count": 0, "elapsed_seconds": 1},
         "snapshots": {
-            "backup_3_months": {"conversation_count": 1, "output_dir": str(tmp_path / "backup")},
             "last_week": {"conversation_count": 1, "output_dir": str(week_dir)},
             "last_day": {"conversation_count": 1, "output_dir": str(day_dir)},
         },
@@ -317,6 +316,12 @@ def test_cli_standard_default_dry_run_shows_slug_directory(monkeypatch, capsys):
 def test_cli_requires_standard_flag_for_explicit_dates():
     with pytest.raises(SystemExit) as error:
         cli.main(["--dry-run", "--start", "2026-07-01", "--end", "2026-10-01"])
+    assert error.value.code == 2
+
+
+def test_cli_standard_rejects_full_archive_flag():
+    with pytest.raises(SystemExit) as error:
+        cli.main(["--standard", "--dry-run", "--full-archive"])
     assert error.value.code == 2
 
 

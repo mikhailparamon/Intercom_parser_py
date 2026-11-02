@@ -5,7 +5,7 @@ from pathlib import Path
 
 from .client import IntercomAPIError, IntercomClient
 from .config import load_config
-from .dates import DateRange, default_range, parse_date_range
+from .dates import default_range, parse_date_range
 from .exporter import ConversationExporter, format_duration, resolve_timezone
 from .monitoring import build_monitoring_windows, run_monitoring
 from .openrouter import OpenRouterError, run_monitoring_analysis, run_standard_analysis
@@ -36,7 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--standard", action="store_true",
                         help="Использовать обычный экспорт вместо режима мониторинга по умолчанию")
     parser.add_argument("--full-archive", action="store_true",
-                        help="Мониторинг: дополнительно выгрузить архив за последние 3 месяца")
+                        help="Мониторинг: выгружать архив за последние 3 месяца вместо недели")
     parser.add_argument("--start", help="Начало периода, YYYY-MM-DD (UTC)")
     parser.add_argument("--end", help="Конец периода, YYYY-MM-DD, не включая эту дату (UTC)")
     parser.add_argument("--output", default="data", help="Корневая директория результатов (по умолчанию: data)")
