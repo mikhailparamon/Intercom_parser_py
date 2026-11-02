@@ -409,3 +409,26 @@ def test_cli_analyze_without_provider_key_is_rejected(tmp_path, monkeypatch, cap
         cli.main(["--analyze", "dahl"])
     assert error.value.code == 2
     assert "DAHL_API_KEY" in capsys.readouterr().err
+
+
+def test_cli_skip_analysis_beats_analyze_flag(tmp_path, monkeypatch, capsys):
+    from types import SimpleNamespace
+    calls = []
+    monkeypatch.setattr(cli, "load_config", lambda: SimpleNamespace(
+        access_token="token", api_version="2.17",
+    ))
+    monkeypatch.setattr(cli, "IntercomClient", lambda *args: object())
+    monkeypatch.setattr(cli, "ConversationExporter", lambda *args, **kwargs: object())
+    monkeypatch.setattr(cli, "run_monitoring", lambda *args, **kwargs: (
+        calls.append(kwargs) or {
+            "export": {"status": "success", "found_count": 0, "exported_count": 0, "error_count": 0, "elapsed_seconds": 0},
+            "snapshots": {
+                "last_week": {"conversation_count": 0, "output_dir": str(tmp_path / "week")},
+                "last_day": {"conversation_count": 0, "output_dir": str(tmp_path / "day")},
+            },
+            "analysis": None,
+        }
+    ))
+
+    assert cli.main(["--skip-analysis", "--analyze", "dahl"]) == 0
+    assert calls[0]["prepare"] is None

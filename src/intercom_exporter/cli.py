@@ -4,7 +4,13 @@ import sys
 from pathlib import Path
 
 from .client import IntercomAPIError, IntercomClient
-from .config import load_config
+from .config import (
+    DEFAULT_DAHL_MODEL,
+    DEFAULT_DAHL_WORKERS,
+    DEFAULT_OPENROUTER_MODEL,
+    DEFAULT_OPENROUTER_WORKERS,
+    load_config,
+)
 from .dates import default_range, parse_date_range
 from .exporter import ConversationExporter, format_duration, resolve_timezone
 from .monitoring import build_monitoring_windows, run_monitoring
@@ -62,13 +68,13 @@ def _analysis_kwargs(args, config, parser) -> dict | None:
         return None
     if args.analyze == "openrouter":
         api_key = getattr(config, "openrouter_api_key", None)
-        model = getattr(config, "openrouter_model", "anthropic/claude-sonnet-4.5")
-        workers = getattr(config, "openrouter_workers", 3)
+        model = getattr(config, "openrouter_model", DEFAULT_OPENROUTER_MODEL)
+        workers = getattr(config, "openrouter_workers", DEFAULT_OPENROUTER_WORKERS)
         base_url, label, missing = OPENROUTER_URL, "OpenRouter", "OPENROUTER_API_KEY"
     else:
         api_key = getattr(config, "dahl_api_key", None)
-        model = getattr(config, "dahl_model", "MiniMaxAI/MiniMax-M2.7")
-        workers = getattr(config, "dahl_workers", 3)
+        model = getattr(config, "dahl_model", DEFAULT_DAHL_MODEL)
+        workers = getattr(config, "dahl_workers", DEFAULT_DAHL_WORKERS)
         base_url, label, missing = DAHL_URL, "Dahl", "DAHL_API_KEY"
     if not api_key:
         parser.error(f"--analyze {args.analyze}: не задан {missing} в .env")
