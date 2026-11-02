@@ -93,3 +93,27 @@ def test_daily_series_falls_back_to_created_at_when_updated_at_unparseable():
     ], "w", "d")
     assert data["daily"][-1] == {"date": "2026-11-02", "count": 1}
     assert data["daily"][-2] == {"date": "2026-11-01", "count": 1}
+
+
+from intercom_exporter.dashboard import render_dashboard_html, write_dashboard
+
+
+def test_write_dashboard_creates_self_contained_offline_html(tmp_path):
+    data = build_dashboard_data(_week_rows(), _day_rows(), CATEGORIES, _classifications(), "w", "d")
+    path = write_dashboard(data, tmp_path)
+    assert path == tmp_path / "dashboard.html"
+    html = path.read_text(encoding="utf-8")
+    assert html.startswith("<!DOCTYPE html>")
+    assert "Подключение VPN" in html
+    assert '"week_total":3' in html.replace(" ", "")
+    assert "http" not in html.split("<body")[0].replace("https://", "").replace("http://", "")  # нет CDN в <head>
+    assert "const DATA = " in html
+    assert "</script>" in html
+
+
+def test_render_dashboard_html_escapes_script_closing_tag():
+    categories = [{"name": "X</script>", "description": "d"}]
+    rows = [{"id": "a", "updated_at": "2026-11-02T00:00:00Z"}]
+    classifications = [_classification("a", "X</script>", "sub", None)]
+    html = render_dashboard_html(build_dashboard_data(rows, rows, categories, classifications, "w", "d"))
+    assert "X<\\/script>" in html
