@@ -17,6 +17,8 @@ from typing import Any
 from .support_analysis import (
     AnalysisError,
     _build_payload,
+    _monitoring_prompt,
+    _period_label,
     _read_conversations,
     _union_conversations,
     _write_json,
@@ -51,6 +53,10 @@ TAXONOMY = [
      "description": "Автоматические уведомления, спам, предложения о сотрудничестве, сообщения не по теме и обращения, в которых недостаточно информации."},
 ]
 
+# KPI дашборда: категория «Оплата и управление подпиской». Не зависит от индекса в TAXONOMY.
+BILLING_CATEGORY = "Оплата и управление подпиской"
+assert any(item["name"] == BILLING_CATEGORY for item in TAXONOMY), "BILLING_CATEGORY должна быть в TAXONOMY"
+
 
 def prepare_agents_bundle(
     week_input_path: str | Path,
@@ -68,6 +74,7 @@ def prepare_agents_bundle(
     if not union_rows:
         raise AnalysisError("Недельный и дневной срезы не содержат обращений")
     conversations = _build_payload(union_rows)["conversations"]
+    workers = min(workers, len(conversations))
 
     work = output / "agents_work"
     if work.exists():
@@ -87,6 +94,20 @@ def prepare_agents_bundle(
             "result_path": str(work / f"result_{index:02d}.json"),
             "conversation_count": len(chunk),
         })
+
+    prompt_file = output / "PROMPT.md"
+    if not prompt_file.is_file():
+        week_payload = _build_payload(week_rows)
+        day_payload = _build_payload(day_rows)
+        week_payload["period"] = _period_label(Path(week_input_path)) or "Последние 7×24 часа UTC"
+        day_payload["period"] = _period_label(Path(day_input_path)) or "Последние 24 часа UTC"
+        combined_payload = _build_payload(union_rows)
+        week_file, day_file = output / "chatgpt_input_week.json", output / "chatgpt_input_day.json"
+        week_bytes = week_file.stat().st_size if week_file.is_file() else 0
+        day_bytes = day_file.stat().st_size if day_file.is_file() else 0
+        _write_text(prompt_file, _monitoring_prompt(
+            week_payload, day_payload, combined_payload, week_bytes, day_bytes,
+        ))
 
     protocol_template = Path(__file__).with_name("agents_protocol.md").read_text(encoding="utf-8")
     manifest = {
@@ -135,6 +156,7 @@ def merge_agents_results(
     union_rows = _union_conversations(week_rows, day_rows)
     union_payload = _build_payload(union_rows)
     union_ids = [item["id"] for item in union_payload["conversations"]]
+    union_id_set = set(union_ids)
     category_names = {item["name"] for item in TAXONOMY}
 
     merged: dict[str, dict] = {}
@@ -149,10 +171,18 @@ def merge_agents_results(
         except (OSError, json.JSONDecodeError):
             errors.append(f"воркер {entry['worker']}: невалидный JSON в {result_path}")
             continue
-        for item in data.get("classifications", []):
+        if not isinstance(data.get("classifications"), list):
+            errors.append(f"воркер {entry['worker']}: classifications не является списком в {result_path}")
+            continue
+        for item in data["classifications"]:
+            if not isinstance(item, dict) or item.get("id") is None:
+                errors.append(f"воркер {entry['worker']}: некорректная запись классификации")
+                continue
             conversation_id = str(item.get("id"))
             if conversation_id in merged:
                 errors.append(f"дубликат ID {conversation_id} (воркер {entry['worker']})")
+            if conversation_id not in union_id_set:
+                errors.append(f"неизвестный ID {conversation_id} (воркер {entry['worker']})")
             if item.get("category") not in category_names:
                 errors.append(f"{conversation_id}: категория не из таксономии: {item.get('category')!r}")
             if item.get("confidence") not in ("low", "medium", "high"):
@@ -229,18 +259,21 @@ def _write_comparison(reference_path: str | Path, result: dict, output: Path) ->
     diffs = []
     for cid in common:
         old, new = ref_by_id[cid], new_by_id[cid]
-        cm = old["category"] == new["category"]
-        sm = old["subcategory"] == new["subcategory"]
-        vm = (old["severity"] or "unknown") == (new["severity"] or "unknown")
+        old_cat, new_cat = old.get("category") or "—", new.get("category") or "—"
+        old_sub, new_sub = old.get("subcategory") or "—", new.get("subcategory") or "—"
+        old_sev, new_sev = old.get("severity") or "unknown", new.get("severity") or "unknown"
+        cm = old_cat == new_cat
+        sm = old_sub == new_sub
+        vm = old_sev == new_sev
         cat_match += cm
         sub_match += sm
         sev_match += vm
         full += cm and sm and vm
         if not cm:
-            confusion[(old["category"], new["category"])] += 1
+            confusion[(old_cat, new_cat)] += 1
         if not (cm and sm and vm):
-            diffs.append((cid, old["category"], new["category"], old["subcategory"], new["subcategory"],
-                          old["severity"] or "—", new["severity"] or "—"))
+            diffs.append((cid, old_cat, new_cat, old_sub, new_sub,
+                          old.get("severity") or "—", new.get("severity") or "—"))
     total = len(common)
     lines = [
         "# Сравнение разметки с предыдущим прогоном", "",
@@ -254,7 +287,9 @@ def _write_comparison(reference_path: str | Path, result: dict, output: Path) ->
         "| Было | Стало | Сколько |", "|---|---|---:|",
     ]
     for (before, after), count in confusion.most_common(20):
-        lines.append(f"| {before} | {after} | {count} |")
+        before_esc = str(before).replace("|", "\\|")
+        after_esc = str(after).replace("|", "\\|")
+        lines.append(f"| {before_esc} | {after_esc} | {count} |")
     lines += ["", "## Список расхождений", "",
               "| ID | Категория была | Категория стала | Подкат. была | Подкат. стала | Тяжесть была | Тяжесть стала |",
               "|---|---|---|---|---|---|---|"]

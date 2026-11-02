@@ -120,3 +120,73 @@ def test_merge_agents_results_compare_with_previous(tmp_path):
     comparison = Path(outcome["comparison_path"]).read_text(encoding="utf-8")
     assert "50.0%" in comparison  # категория совпала у 1 из 2
     assert outcome["comparison_path"].endswith("comparison_report.md")
+
+
+def test_merge_agents_results_rejects_unknown_id(tmp_path):
+    week = _write_conversations(tmp_path / "last_week", ["a", "b"])
+    day = _write_conversations(tmp_path / "last_day", ["a"])
+    out = tmp_path / "support-analysis"
+    manifest = prepare_agents_bundle(week, day, out, workers=2)
+    _fill_results(manifest, category=None)
+    entry = manifest["chunks"][0]
+    result = json.loads(Path(entry["result_path"]).read_text(encoding="utf-8"))
+    result["classifications"].append({
+        "id": "ghost", "category": "Проблемы подключения VPN", "subcategory": "s",
+        "problem_summary": "s", "severity": None, "severity_reason": "—",
+        "confidence": "high", "evidence": "",
+    })
+    Path(entry["result_path"]).write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(AnalysisError, match="неизвестный ID"):
+        merge_agents_results(week, day, out)
+
+
+def test_merge_agents_results_rejects_non_list_classifications(tmp_path):
+    week = _write_conversations(tmp_path / "last_week", ["a", "b"])
+    day = _write_conversations(tmp_path / "last_day", ["a"])
+    out = tmp_path / "support-analysis"
+    manifest = prepare_agents_bundle(week, day, out, workers=2)
+    _fill_results(manifest, category=None)
+    entry = manifest["chunks"][0]
+    Path(entry["result_path"]).write_text(json.dumps({"classifications": {"a": "x"}}, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(AnalysisError, match="не является списком"):
+        merge_agents_results(week, day, out)
+
+
+def test_merge_agents_results_rejects_non_dict_item(tmp_path):
+    week = _write_conversations(tmp_path / "last_week", ["a", "b"])
+    day = _write_conversations(tmp_path / "last_day", ["a"])
+    out = tmp_path / "support-analysis"
+    manifest = prepare_agents_bundle(week, day, out, workers=2)
+    _fill_results(manifest, category=None)
+    entry = manifest["chunks"][0]
+    Path(entry["result_path"]).write_text(
+        json.dumps({"classifications": ["не словарь"]}, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(AnalysisError, match="некорректная запись классификации"):
+        merge_agents_results(week, day, out)
+
+
+def test_prepare_agents_bundle_caps_workers_at_conversation_count(tmp_path):
+    week = _write_conversations(tmp_path / "last_week", ["a", "b", "c"])
+    day = _write_conversations(tmp_path / "last_day", ["a"])
+    out = tmp_path / "support-analysis"
+
+    manifest = prepare_agents_bundle(week, day, out, workers=20)
+
+    assert manifest["workers"] == 3
+    assert len(manifest["chunks"]) == 3
+
+
+def test_prepare_agents_bundle_generates_prompt(tmp_path):
+    week = _write_conversations(tmp_path / "last_week", ["a", "b"])
+    day = _write_conversations(tmp_path / "last_day", ["a"])
+    out = tmp_path / "support-analysis"
+
+    manifest = prepare_agents_bundle(week, day, out, workers=2)
+
+    prompt_path = out / "PROMPT.md"
+    assert prompt_path.is_file()
+    assert manifest["prompt_path"] == str(prompt_path)
+    assert "таксоном" in prompt_path.read_text(encoding="utf-8").lower()
