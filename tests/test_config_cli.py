@@ -239,20 +239,79 @@ def test_logs_and_manifest_do_not_expose_api_token(tmp_path, caplog):
 
 
 def test_cli_defaults_to_monitoring_and_dry_run_shows_rolling_windows(monkeypatch, capsys):
-    from intercom_exporter.dates import DateRange
+    from datetime import datetime, timezone
+    from intercom_exporter.dates import DateTimeRange
 
     monkeypatch.setattr(cli, "build_monitoring_windows", lambda: {
-        "backup_3_months": DateRange(date(2026, 7, 31), date(2026, 10, 31)),
-        "last_week": DateRange(date(2026, 10, 24), date(2026, 10, 31)),
-        "last_day": DateRange(date(2026, 10, 30), date(2026, 10, 31)),
+        "backup_3_months": DateTimeRange(datetime(2026, 7, 31, tzinfo=timezone.utc), datetime(2026, 10, 31, tzinfo=timezone.utc)),
+        "last_week": DateTimeRange(datetime(2026, 10, 24, tzinfo=timezone.utc), datetime(2026, 10, 31, tzinfo=timezone.utc)),
+        "last_day": DateTimeRange(datetime(2026, 10, 30, tzinfo=timezone.utc), datetime(2026, 10, 31, tzinfo=timezone.utc)),
     })
 
     assert cli.main(["--dry-run"]) == 0
     output = capsys.readouterr().out
     assert "Мониторинг UTC" in output
-    assert "2026-07-31" in output
+    assert "архив выключен" in output
     assert "2026-10-24" in output
     assert "2026-10-30" in output
+    assert "2026-07-31" not in output
+
+
+def test_cli_dry_run_with_full_archive_shows_archive_window(monkeypatch, capsys):
+    from datetime import datetime, timezone
+    from intercom_exporter.dates import DateTimeRange
+
+    monkeypatch.setattr(cli, "build_monitoring_windows", lambda: {
+        "backup_3_months": DateTimeRange(datetime(2026, 7, 31, tzinfo=timezone.utc), datetime(2026, 10, 31, tzinfo=timezone.utc)),
+        "last_week": DateTimeRange(datetime(2026, 10, 24, tzinfo=timezone.utc), datetime(2026, 10, 31, tzinfo=timezone.utc)),
+        "last_day": DateTimeRange(datetime(2026, 10, 30, tzinfo=timezone.utc), datetime(2026, 10, 31, tzinfo=timezone.utc)),
+    })
+
+    assert cli.main(["--dry-run", "--full-archive"]) == 0
+    output = capsys.readouterr().out
+    assert "архив [2026-07-31" in output
+    assert "2026-10-24" in output
+
+
+def test_cli_monitoring_passes_full_archive_flag(tmp_path, monkeypatch, capsys):
+    from types import SimpleNamespace
+    captured = {}
+    monkeypatch.setattr(cli, "load_config", lambda: SimpleNamespace(access_token="token", api_version="2.17"))
+    monkeypatch.setattr(cli, "IntercomClient", lambda *args: object())
+    monkeypatch.setattr(cli, "ConversationExporter", lambda *args, **kwargs: object())
+
+    def fake_run_monitoring(*args, **kwargs):
+        captured.update(kwargs)
+        return {
+            "export": {"status": "success", "found_count": 0, "exported_count": 0, "error_count": 0, "elapsed_seconds": 0},
+            "snapshots": {
+                "backup_3_months": {"conversation_count": 0, "output_dir": str(tmp_path / "backup")},
+                "last_week": {"conversation_count": 0, "output_dir": str(tmp_path / "week")},
+                "last_day": {"conversation_count": 0, "output_dir": str(tmp_path / "day")},
+            },
+            "analysis": None,
+        }
+
+    monkeypatch.setattr(cli, "run_monitoring", fake_run_monitoring)
+
+    assert cli.main(["--full-archive", "--skip-analysis"]) == 0
+    assert captured["full_archive"] is True
+    output = capsys.readouterr().out
+    assert "Архив за 3 месяца" in output
+
+
+def test_cli_standard_default_dry_run_shows_slug_directory(monkeypatch, capsys):
+    from datetime import datetime, timezone
+    from intercom_exporter.dates import DateTimeRange
+
+    monkeypatch.setattr(cli, "default_range", lambda: DateTimeRange(
+        datetime(2026, 10, 26, 8, 15, 30, tzinfo=timezone.utc),
+        datetime(2026, 11, 2, 8, 15, 30, tzinfo=timezone.utc),
+    ))
+
+    assert cli.main(["--standard", "--dry-run"]) == 0
+    output = capsys.readouterr().out
+    assert "20261026T081530Z_20261102T081530Z" in output
 
 
 def test_cli_requires_standard_flag_for_explicit_dates():

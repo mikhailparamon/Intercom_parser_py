@@ -35,6 +35,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Мониторинг обращений Intercom и их экспорт в JSON")
     parser.add_argument("--standard", action="store_true",
                         help="Использовать обычный экспорт вместо режима мониторинга по умолчанию")
+    parser.add_argument("--full-archive", action="store_true",
+                        help="Мониторинг: дополнительно выгрузить архив за последние 3 месяца")
     parser.add_argument("--start", help="Начало периода, YYYY-MM-DD (UTC)")
     parser.add_argument("--end", help="Конец периода, YYYY-MM-DD, не включая эту дату (UTC)")
     parser.add_argument("--output", default="data", help="Корневая директория результатов (по умолчанию: data)")
@@ -57,6 +59,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(levelname)s: %(message)s")
     if args.standard:
+        if args.full_archive:
+            parser.error("Параметр --full-archive доступен только в режиме мониторинга")
         try:
             if args.start is None and args.end is None:
                 date_range = default_range()
@@ -67,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
         selection = args.selection or "all"
         fields = args.fields or "important"
         if args.dry_run:
-            base_output_dir = Path(args.output) / f"{date_range.start}_{date_range.end}"
+            base_output_dir = Path(args.output) / date_range.slug
             print(f"Обычный экспорт UTC: [{date_range.start}, {date_range.end}); отбор: {selection}; поля: {fields}; время: {args.timezone}; базовый каталог: {base_output_dir} (если он занят, будет создан каталог с суффиксом)")
             return 0
     else:
@@ -77,13 +81,16 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("Параметры --selection и --fields доступны с --standard; мониторинг всегда использует all")
         windows = build_monitoring_windows()
         if args.dry_run:
-            archive = windows["backup_3_months"]
-            base_output_dir = Path(args.output) / f"{archive.start}_{archive.end}"
+            source = windows["backup_3_months"] if args.full_archive else windows["last_week"]
+            base_output_dir = Path(args.output) / source.slug
+            if args.full_archive:
+                archive_line = f"архив [{windows['backup_3_months'].start.isoformat()}, {windows['backup_3_months'].end.isoformat()}); "
+            else:
+                archive_line = "архив выключен (включить: --full-archive); "
             print(
-                "Мониторинг UTC: "
-                f"архив [{archive.start}, {archive.end}); "
-                f"неделя [{windows['last_week'].start}, {windows['last_week'].end}); "
-                f"день [{windows['last_day'].start}, {windows['last_day'].end}); "
+                "Мониторинг UTC: " + archive_line +
+                f"неделя [{windows['last_week'].start.isoformat()}, {windows['last_week'].end.isoformat()}); "
+                f"день [{windows['last_day'].start.isoformat()}, {windows['last_day'].end.isoformat()}); "
                 f"поля: all; базовый каталог: {base_output_dir} (при повторном запуске будет создан новый каталог)"
             )
             return 0
@@ -97,7 +104,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.standard:
         try:
             result = run_monitoring(
-                exporter, args.output, windows=windows, api_version=config.api_version,
+                exporter, args.output, full_archive=args.full_archive, windows=windows, api_version=config.api_version,
                 timezone_name=args.timezone,
                 prepare=None if args.skip_analysis else prepare_monitoring_analysis,
             )
@@ -106,13 +113,15 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         export_result = result["export"]
         print(
-            f"Экспорт архива завершён: {export_result['status']}. "
+            f"Экспорт завершён: {export_result['status']}. "
             f"Найдено: {export_result['found_count']}, успешно обработано: "
             f"{export_result['exported_count']}, ошибок: {export_result['error_count']}. "
             f"Время: {format_duration(export_result['elapsed_seconds'])}."
         )
-        for name, label in (("backup_3_months", "Архив за 3 месяца"),
-                            ("last_week", "Срез за неделю"), ("last_day", "Срез за день")):
+        labels = [("last_week", "Срез за неделю"), ("last_day", "Срез за день")]
+        if args.full_archive:
+            labels.insert(0, ("backup_3_months", "Архив за 3 месяца"))
+        for name, label in labels:
             snapshot = result["snapshots"][name]
             print(f"{label}: {snapshot['conversation_count']} обращений. Каталог: {snapshot['output_dir']}")
         if result["analysis"]:
