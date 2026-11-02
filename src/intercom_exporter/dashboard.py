@@ -144,35 +144,35 @@ _TEMPLATE = """<!DOCTYPE html>
 <style>
 :root{--teal:#087f82;--blue:#08a9df;--bg:#f3f7f8;--card:#fff;--text:#1d2b33;--muted:#6b7f88;--border:#e3ecef}
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--text);padding:24px}
+body{font-family:"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--text);padding:24px;font-size:16px}
 .wrap{max-width:1200px;margin:0 auto}
 header{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-bottom:20px}
-h1{font-size:24px}
-.badge{background:var(--teal);color:#fff;border-radius:12px;padding:2px 10px;font-size:12px}
-.period{color:var(--muted);font-size:13px}
+h1{font-size:26px}
+.badge{background:var(--teal);color:#fff;border-radius:12px;padding:2px 10px;font-size:13px}
+.period{color:var(--muted);font-size:14px}
 .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-bottom:20px}
 .kpi{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px}
-.kpi .label{font-size:12px;color:var(--muted);text-transform:uppercase}
-.kpi .value{font-size:24px;font-weight:600;margin-top:4px}
-.kpi .sub{font-size:12px;color:var(--muted)}
+.kpi .label{font-size:13px;color:var(--muted);text-transform:uppercase}
+.kpi .value{font-size:26px;font-weight:600;margin-top:4px}
+.kpi .sub{font-size:13px;color:var(--muted)}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 .grid .card:first-child{grid-column:1/-1}
 @media (max-width:720px){.grid{grid-template-columns:1fr}}
 .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px}
-.card h2{font-size:15px;margin-bottom:12px}
-.legend{display:flex;flex-wrap:wrap;gap:8px;font-size:12px;margin-top:10px}
+.card h2{font-size:17px;margin-bottom:12px}
+.legend{display:flex;flex-wrap:wrap;gap:8px;font-size:14px;margin-top:10px}
 .donut-card{display:flex;flex-wrap:wrap;align-items:center}
 .donut-card h2{width:100%}
 .donut-card .legend{flex:1;flex-direction:column;align-items:flex-start;margin-top:0}
 .legend span{display:inline-flex;align-items:center;gap:4px}
 .dot{width:10px;height:10px;border-radius:50%;display:inline-block}
-.bar-row{display:grid;grid-template-columns:minmax(120px,220px) 1fr 48px;gap:8px;align-items:center;font-size:13px;margin:5px 0}
+.bar-row{display:grid;grid-template-columns:minmax(120px,220px) 1fr 48px;gap:8px;align-items:center;font-size:14px;margin:5px 0}
 .bar{height:14px;border-radius:7px}
 .bar-bg{background:#eef4f6;border-radius:7px;overflow:hidden}
-table{width:100%;border-collapse:collapse;font-size:13px}
+table{width:100%;border-collapse:collapse;font-size:14px}
 th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--border);vertical-align:top}
 th{color:var(--muted);font-weight:600}
-footer{margin-top:20px;color:var(--muted);font-size:12px;text-align:center}
+footer{margin-top:20px;color:var(--muted);font-size:13px;text-align:center}
 </style>
 </head>
 <body>
@@ -226,17 +226,27 @@ document.getElementById("kpis").innerHTML = kpis.map(([label, value, sub]) =>
   const el = document.getElementById("chart-daily");
   const rows = DATA.daily;
   if (!rows.length) { el.textContent = "Нет данных по датам"; return; }
-  const W = 560, H = 220, P = 34;
+  const W = 900, H = 280, PL = 56, PR = 24, PT = 24, PB = 48;
   const max = Math.max(...rows.map(r => r.count), 1);
-  const x = i => P + i * (W - 2 * P) / (rows.length - 1 || 1);
-  const y = v => H - P - (v / max) * (H - 2 * P);
+  const tickStep = Math.max(1, Math.ceil(max / 4));
+  const yMax = tickStep * Math.ceil(max / tickStep);
+  const x = i => PL + i * (W - PL - PR) / (rows.length - 1 || 1);
+  const y = v => PT + (1 - v / yMax) * (H - PT - PB);
   const pts = rows.map((r, i) => `${x(i)},${y(r.count)}`).join(" ");
-  let svg = `<svg viewBox="0 0 ${W} ${H}" width="100%"><polyline points="${pts}" fill="none" stroke="${PAL[0]}" stroke-width="2.5"/>`;
+  let svg = `<svg viewBox="0 0 ${W} ${H}" width="100%">`;
+  for (let v = 0; v <= yMax; v += tickStep) {
+    svg += `<line x1="${PL}" y1="${y(v)}" x2="${W - PR}" y2="${y(v)}" stroke="${v ? "#e3ecef" : "#c3d3d9"}" stroke-width="1"/>` +
+      `<text x="${PL - 10}" y="${y(v) + 5}" text-anchor="end" font-size="13" fill="#6b7f88">${v}</text>`;
+  }
+  svg += `<line x1="${PL}" y1="${PT}" x2="${PL}" y2="${H - PB}" stroke="#c3d3d9" stroke-width="1"/>` +
+    `<text x="16" y="${PT + (H - PT - PB) / 2}" text-anchor="middle" font-size="13" fill="#6b7f88" transform="rotate(-90 16 ${PT + (H - PT - PB) / 2})">Обращений</text>` +
+    `<polyline points="${pts}" fill="none" stroke="${PAL[0]}" stroke-width="2.5"/>`;
   rows.forEach((r, i) => {
     svg += `<circle cx="${x(i)}" cy="${y(r.count)}" r="4" fill="${PAL[1]}"/>` +
-      `<text x="${x(i)}" y="${y(r.count) - 9}" text-anchor="middle" font-size="12">${r.count ? r.count : ""}</text>` +
-      `<text x="${x(i)}" y="${H - P + 16}" text-anchor="middle" font-size="11" fill="#6b7f88">${r.date.slice(5)}</text>`;
+      `<text x="${x(i)}" y="${y(r.count) - 10}" text-anchor="middle" font-size="13">${r.count ? r.count : ""}</text>` +
+      `<text x="${x(i)}" y="${H - PB + 20}" text-anchor="middle" font-size="13" fill="#6b7f88">${r.date.slice(5)}</text>`;
   });
+  svg += `<text x="${PL + (W - PL - PR) / 2}" y="${H - 6}" text-anchor="middle" font-size="13" fill="#6b7f88">Дата</text>`;
   el.innerHTML = svg + "</svg>";
 })();
 
