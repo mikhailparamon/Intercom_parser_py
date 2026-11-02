@@ -146,7 +146,9 @@ h1{font-size:24px}
 .kpi .label{font-size:12px;color:var(--muted);text-transform:uppercase}
 .kpi .value{font-size:24px;font-weight:600;margin-top:4px}
 .kpi .sub{font-size:12px;color:var(--muted)}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:14px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.grid .card:first-child{grid-column:1/-1}
+@media (max-width:720px){.grid{grid-template-columns:1fr}}
 .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px}
 .card h2{font-size:15px;margin-bottom:12px}
 .legend{display:flex;flex-wrap:wrap;gap:8px;font-size:12px;margin-top:10px}
