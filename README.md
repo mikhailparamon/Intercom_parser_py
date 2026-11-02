@@ -227,6 +227,12 @@ $runDir = "data\2026-07-31_2026-10-31_run_<UTC-время-запуска>"
 python analyze_support.py report-monitoring --week "$runDir\last_week\conversations.json" --day "$runDir\last_day\conversations.json" --result "$runDir\support-analysis\chatgpt_result.json"
 ```
 
+Вместе с `report.md` и `classifications.csv` команда `report-monitoring` генерирует интерактивный офлайн-дашборд `dashboard.html` (KPI, график обращений по дням, круговые диаграммы категорий за неделю и день, топ-10 подкатегорий, распределение тяжести, таблица обращений высокой тяжести). Дашборд строится детерминированно из проверенных классификаций, без обращения к LLM. По умолчанию файл пишется в общий каталог анализа; каталог можно переопределить флагом `--dashboard-dir`:
+
+```bash
+python analyze_support.py report-monitoring --week .../last_week/conversations.json --day .../last_day/conversations.json --result .../chatgpt_result.json --dashboard-dir "D:\Program\My projects\Intercom\report_dashboard"
+```
+
 Запустить автоматический анализ без нового экспорта можно флагом `--analyze` у команд `prepare` и `prepare-monitoring`:
 
 ```powershell
