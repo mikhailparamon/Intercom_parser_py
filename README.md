@@ -227,11 +227,13 @@ $runDir = "data\2026-07-31_2026-10-31_run_<UTC-время-запуска>"
 python analyze_support.py report-monitoring --week "$runDir\last_week\conversations.json" --day "$runDir\last_day\conversations.json" --result "$runDir\support-analysis\chatgpt_result.json"
 ```
 
-Если автоматический анализ остановился, повторно подготовить и продолжить его в том же каталоге (используя проверенные пакеты из кэша) можно так:
+Запустить автоматический анализ без нового экспорта можно флагом `--analyze` у команд `prepare` и `prepare-monitoring`:
 
 ```powershell
-python analyze_support.py prepare-monitoring --week "$runDir\last_week\conversations.json" --day "$runDir\last_day\conversations.json" --output "$runDir\support-analysis"
+python analyze_support.py prepare-monitoring --week "$runDir\last_week\conversations.json" --day "$runDir\last_day\conversations.json" --output "$runDir\support-analysis" --analyze dahl
 ```
+
+Без `--analyze` команды `prepare` и `prepare-monitoring` только готовят файлы для ручного анализа; с `--analyze` без ключа соответствующего провайдера в `.env` команда завершается с ошибкой. Если автоматический анализ остановился, та же команда повторно подготовит и продолжит его в том же каталоге, используя проверенные пакеты из кэша.
 
 Команда проверит полноту объединения, fingerprints обоих окон и членство ID, затем создаст один отчёт с отдельными рейтингами для недели и дня и сравнительной таблицей. Совпадающие ID классифицируются один раз; в CSV указывается, к каким окнам относится каждое обращение. Для повторной подготовки пары входов без нового экспорта используйте `analyze_support.py prepare-monitoring --week ... --day ... --output ...`.
 

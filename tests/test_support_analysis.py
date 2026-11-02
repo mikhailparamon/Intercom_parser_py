@@ -260,7 +260,7 @@ def test_cli_prepare_and_report_commands_work_without_api_credentials(tmp_path, 
     assert main(["report", "--input", str(input_path), "--result", str(result_path)]) == 0
 
 
-def test_prepare_command_uses_openrouter_when_key_is_configured(tmp_path, monkeypatch, capsys):
+def test_prepare_command_uses_openrouter_when_analyze_flag_is_set(tmp_path, monkeypatch, capsys):
     from intercom_exporter import openrouter
 
     input_path = tmp_path / "conversations.jsonl"
@@ -270,16 +270,110 @@ def test_prepare_command_uses_openrouter_when_key_is_configured(tmp_path, monkey
     monkeypatch.setenv("OPENROUTER_MODEL", "vendor/model")
     monkeypatch.setenv("OPENROUTER_WORKERS", "3")
     calls = []
-    monkeypatch.setattr(openrouter, "run_standard_analysis", lambda *args: calls.append(args) or {
-        "result_path": "result", "report_path": "report", "classifications_path": "csv",
-    })
 
-    assert main(["prepare", "--input", str(input_path)]) == 0
-    assert calls == [(str(input_path), str(tmp_path / "support-analysis"), "router-key", "vendor/model", 3)]
+    def fake_run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {"result_path": "result", "report_path": "report", "classifications_path": "csv"}
+
+    monkeypatch.setattr(openrouter, "run_standard_analysis", fake_run)
+
+    assert main(["prepare", "--input", str(input_path), "--analyze", "openrouter"]) == 0
+    assert calls == [(
+        (str(input_path), str(tmp_path / "support-analysis")),
+        {"api_key": "router-key", "model": "vendor/model", "workers": 3,
+         "base_url": openrouter.OPENROUTER_URL, "provider_label": "OpenRouter"},
+    )]
     assert "Анализ завершён" in capsys.readouterr().out
 
 
-def test_prepare_monitoring_command_uses_one_openrouter_analysis_when_key_is_configured(tmp_path, monkeypatch, capsys):
+def test_prepare_with_key_but_without_analyze_flag_stays_manual(tmp_path, monkeypatch, capsys):
+    from intercom_exporter import openrouter
+
+    input_path = tmp_path / "conversations.jsonl"
+    write_jsonl(input_path, sample_conversations())
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "router-key")
+    monkeypatch.setenv("DAHL_API_KEY", "dahl-key")
+    calls = []
+    monkeypatch.setattr(openrouter, "run_standard_analysis", lambda *args, **kwargs: calls.append((args, kwargs)))
+
+    assert main(["prepare", "--input", str(input_path)]) == 0
+    assert calls == []
+    assert "Автоматический анализ отключён" in capsys.readouterr().out
+
+
+def test_prepare_analyze_dahl_uses_dahl_settings(tmp_path, monkeypatch, capsys):
+    from intercom_exporter import openrouter
+
+    input_path = tmp_path / "conversations.jsonl"
+    write_jsonl(input_path, sample_conversations())
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DAHL_API_KEY", "dahl-key")
+    monkeypatch.delenv("DAHL_MODEL", raising=False)
+    monkeypatch.delenv("DAHL_WORKERS", raising=False)
+    calls = []
+
+    def fake_run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {"result_path": "result", "report_path": "report", "classifications_path": "csv"}
+
+    monkeypatch.setattr(openrouter, "run_standard_analysis", fake_run)
+
+    assert main(["prepare", "--input", str(input_path), "--analyze", "dahl"]) == 0
+    assert calls == [(
+        (str(input_path), str(tmp_path / "support-analysis")),
+        {"api_key": "dahl-key", "model": "MiniMaxAI/MiniMax-M2.7", "workers": 3,
+         "base_url": openrouter.DAHL_URL, "provider_label": "Dahl"},
+    )]
+    assert "Dahl" in capsys.readouterr().out
+
+
+def test_prepare_analyze_dahl_without_key_fails(tmp_path, monkeypatch):
+    from intercom_exporter import config
+
+    input_path = tmp_path / "conversations.jsonl"
+    write_jsonl(input_path, sample_conversations())
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("DAHL_API_KEY", raising=False)
+    monkeypatch.setattr(config, "load_dahl_settings", lambda: None)
+
+    with pytest.raises(SystemExit) as excinfo:
+        main(["prepare", "--input", str(input_path), "--analyze", "dahl"])
+    assert excinfo.value.code == 2
+
+
+def test_prepare_monitoring_analyze_dahl_uses_dahl_settings(tmp_path, monkeypatch, capsys):
+    from intercom_exporter import openrouter
+
+    week_dir, day_dir = tmp_path / "last_week", tmp_path / "last_day"
+    week_dir.mkdir()
+    day_dir.mkdir()
+    week_path, day_path = week_dir / "conversations.json", day_dir / "conversations.json"
+    rows = sample_conversations()
+    week_path.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
+    day_path.write_text(json.dumps(rows[:1], ensure_ascii=False), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DAHL_API_KEY", "dahl-key")
+    monkeypatch.setenv("DAHL_MODEL", "dahl-vendor/model")
+    monkeypatch.setenv("DAHL_WORKERS", "2")
+    calls = []
+
+    def fake_run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {"result_path": "result", "report_path": "report", "classifications_path": "csv"}
+
+    monkeypatch.setattr(openrouter, "run_monitoring_analysis", fake_run)
+
+    assert main(["prepare-monitoring", "--week", str(week_path), "--day", str(day_path), "--analyze", "dahl"]) == 0
+    assert calls == [(
+        (str(week_path), str(day_path), str(tmp_path / "support-analysis")),
+        {"api_key": "dahl-key", "model": "dahl-vendor/model", "workers": 2,
+         "base_url": openrouter.DAHL_URL, "provider_label": "Dahl"},
+    )]
+    assert "Анализ завершён" in capsys.readouterr().out
+
+
+def test_prepare_monitoring_command_uses_one_openrouter_analysis_when_analyze_flag_is_set(tmp_path, monkeypatch, capsys):
     from intercom_exporter import openrouter
 
     week_dir, day_dir = tmp_path / "last_week", tmp_path / "last_day"
@@ -294,12 +388,19 @@ def test_prepare_monitoring_command_uses_one_openrouter_analysis_when_key_is_con
     monkeypatch.setenv("OPENROUTER_MODEL", "vendor/model")
     monkeypatch.setenv("OPENROUTER_WORKERS", "3")
     calls = []
-    monkeypatch.setattr(openrouter, "run_monitoring_analysis", lambda *args: calls.append(args) or {
-        "result_path": "result", "report_path": "report", "classifications_path": "csv",
-    })
 
-    assert main(["prepare-monitoring", "--week", str(week_path), "--day", str(day_path)]) == 0
-    assert calls == [(str(week_path), str(day_path), str(tmp_path / "support-analysis"), "router-key", "vendor/model", 3)]
+    def fake_run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {"result_path": "result", "report_path": "report", "classifications_path": "csv"}
+
+    monkeypatch.setattr(openrouter, "run_monitoring_analysis", fake_run)
+
+    assert main(["prepare-monitoring", "--week", str(week_path), "--day", str(day_path), "--analyze", "openrouter"]) == 0
+    assert calls == [(
+        (str(week_path), str(day_path), str(tmp_path / "support-analysis")),
+        {"api_key": "router-key", "model": "vendor/model", "workers": 3,
+         "base_url": openrouter.OPENROUTER_URL, "provider_label": "OpenRouter"},
+    )]
     assert "Анализ завершён" in capsys.readouterr().out
 
 def test_prepare_monitoring_creates_two_inputs_and_one_shared_prompt(tmp_path):

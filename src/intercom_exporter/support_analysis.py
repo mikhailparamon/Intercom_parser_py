@@ -641,6 +641,8 @@ def build_parser() -> argparse.ArgumentParser:
     prepare = subparsers.add_parser("prepare", help="Очистить и подготовить набор для ChatGPT")
     prepare.add_argument("--input", required=True, help="Исходный conversations.json или conversations.jsonl")
     prepare.add_argument("--output", help="Каталог анализа (по умолчанию: support-analysis рядом с входным файлом)")
+    prepare.add_argument("--analyze", choices=("openrouter", "dahl"),
+                         help="Автоматический AI-анализ через выбранный провайдер (без флага — только подготовка файлов для ручного анализа)")
     report = subparsers.add_parser("report", help="Проверить классификации ChatGPT и построить отчёт")
     report.add_argument("--input", required=True, help="Исходный conversations.json или conversations.jsonl")
     report.add_argument("--result", required=True, help="JSON-результат ChatGPT")
@@ -649,12 +651,38 @@ def build_parser() -> argparse.ArgumentParser:
     monitor_prepare.add_argument("--week", required=True, help="Недельный conversations.json")
     monitor_prepare.add_argument("--day", required=True, help="Дневной conversations.json")
     monitor_prepare.add_argument("--output", help="Общий каталог с двумя входными файлами и PROMPT.md")
+    monitor_prepare.add_argument("--analyze", choices=("openrouter", "dahl"),
+                                 help="Автоматический AI-анализ через выбранный провайдер (без флага — только подготовка файлов для ручного анализа)")
     monitor_report = subparsers.add_parser("report-monitoring", help="Проверить общий результат и построить единый отчёт по двум окнам")
     monitor_report.add_argument("--week", required=True, help="Исходный conversations.json недельного окна")
     monitor_report.add_argument("--day", required=True, help="Исходный conversations.json дневного окна")
     monitor_report.add_argument("--result", required=True, help="Единый chatgpt_result.json")
     monitor_report.add_argument("--output", help="Общий каталог для report.md и classifications.csv")
     return parser
+
+
+def _analysis_kwargs(args, parser) -> dict[str, Any] | None:
+    """Настройки автоанализа или None, если анализ не запрошен."""
+    if not args.analyze:
+        return None
+    from . import config
+    from .openrouter import DAHL_URL, OPENROUTER_LABEL, OPENROUTER_URL
+
+    if args.analyze == "openrouter":
+        settings = config.load_openrouter_settings()
+        base_url, label, missing = OPENROUTER_URL, OPENROUTER_LABEL, "OPENROUTER_API_KEY"
+    else:
+        settings = config.load_dahl_settings()
+        base_url, label, missing = DAHL_URL, "Dahl", "DAHL_API_KEY"
+    if settings is None:
+        parser.error(f"--analyze {args.analyze}: не задан {missing} в .env")
+    return {
+        "api_key": settings.api_key,
+        "model": settings.model,
+        "workers": settings.workers,
+        "base_url": base_url,
+        "provider_label": label,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -665,21 +693,18 @@ def main(argv: list[str] | None = None) -> int:
             result = prepare_analysis(args.input, args.output)
             size_mb = result["input_file_bytes"] / (1024 * 1024)
             print(f"Подготовлено обращений: {result['conversation_count']}; сообщений: {result['message_count']}; размер JSON: {size_mb:.1f} МБ. Файлы для ChatGPT: {result['output_dir']}")
-            from .config import load_openrouter_settings
-            from .openrouter import run_standard_analysis
+            analysis = _analysis_kwargs(args, parser)
+            if analysis:
+                from .openrouter import run_standard_analysis
 
-            settings = load_openrouter_settings()
-            if settings:
-                print(f"Выполняется анализ через OpenRouter ({settings.model})...")
-                ai_result = run_standard_analysis(
-                    args.input, result["output_dir"], settings.api_key, settings.model, settings.workers,
-                )
+                print(f"Выполняется анализ через {analysis['provider_label']} ({analysis['model']})...")
+                ai_result = run_standard_analysis(args.input, result["output_dir"], **analysis)
                 print(
                     f"Анализ завершён. Результат: {ai_result['result_path']}; "
                     f"отчёт: {ai_result['report_path']}; CSV: {ai_result['classifications_path']}"
                 )
             else:
-                print("OPENROUTER_API_KEY не задан; входной JSON и PROMPT.md готовы для ChatGPT.")
+                print("Автоматический анализ отключён (включить: --analyze openrouter|dahl); входной JSON и PROMPT.md готовы для ручного анализа.")
         elif args.command == "report":
             result = generate_report(args.input, args.result, args.output)
             print(f"Отчёт сохранён: {result['report_path']}. Разметка: {result['classifications_path']}")
@@ -690,21 +715,18 @@ def main(argv: list[str] | None = None) -> int:
                 f"({result['day_conversation_count']}), уникальных ID: {result['unique_conversation_count']}. "
                 f"Один PROMPT.md и оба входных JSON: {result['output_dir']}"
             )
-            from .config import load_openrouter_settings
-            from .openrouter import run_monitoring_analysis
+            analysis = _analysis_kwargs(args, parser)
+            if analysis:
+                from .openrouter import run_monitoring_analysis
 
-            settings = load_openrouter_settings()
-            if settings:
-                print(f"Выполняется анализ через OpenRouter ({settings.model})...")
-                ai_result = run_monitoring_analysis(
-                    args.week, args.day, result["output_dir"], settings.api_key, settings.model, settings.workers,
-                )
+                print(f"Выполняется анализ через {analysis['provider_label']} ({analysis['model']})...")
+                ai_result = run_monitoring_analysis(args.week, args.day, result["output_dir"], **analysis)
                 print(
                     f"Анализ завершён. Результат: {ai_result['result_path']}; "
                     f"отчёт: {ai_result['report_path']}; CSV: {ai_result['classifications_path']}"
                 )
             else:
-                print("OPENROUTER_API_KEY не задан; JSON-файлы и PROMPT.md готовы для ChatGPT.")
+                print("Автоматический анализ отключён (включить: --analyze openrouter|dahl); JSON-файлы и PROMPT.md готовы для ручного анализа.")
         else:
             result = generate_monitoring_report(args.week, args.day, args.result, args.output)
             print(f"Единый отчёт сохранён: {result['report_path']}. Разметка: {result['classifications_path']}")
