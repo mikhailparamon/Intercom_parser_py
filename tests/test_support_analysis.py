@@ -243,14 +243,64 @@ def test_report_rejects_invalid_chatgpt_classification(tmp_path, mutate, message
         generate_report(input_path, result_path)
 
 
-def test_cli_prepare_and_report_commands_work_without_api_credentials(tmp_path):
+def test_cli_prepare_and_report_commands_work_without_api_credentials(tmp_path, monkeypatch):
     input_path = tmp_path / "conversations.jsonl"
     write_jsonl(input_path, sample_conversations())
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    from intercom_exporter import config
+    monkeypatch.setattr(config, "load_openrouter_settings", lambda: None)
     assert main(["prepare", "--input", str(input_path)]) == 0
     result_path = tmp_path / "support-analysis" / "chatgpt_result.json"
+    assert not result_path.exists()
+    assert (tmp_path / "support-analysis" / "chatgpt_input.json").is_file()
+    assert (tmp_path / "support-analysis" / "PROMPT.md").is_file()
     payload = json.loads((tmp_path / "support-analysis" / "chatgpt_input.json").read_text(encoding="utf-8"))
     result_path.write_text(json.dumps(valid_result(payload["dataset_fingerprint"]), ensure_ascii=False), encoding="utf-8")
     assert main(["report", "--input", str(input_path), "--result", str(result_path)]) == 0
+
+
+def test_prepare_command_uses_openrouter_when_key_is_configured(tmp_path, monkeypatch, capsys):
+    from intercom_exporter import openrouter
+
+    input_path = tmp_path / "conversations.jsonl"
+    write_jsonl(input_path, sample_conversations())
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "router-key")
+    monkeypatch.setenv("OPENROUTER_MODEL", "vendor/model")
+    monkeypatch.setenv("OPENROUTER_WORKERS", "3")
+    calls = []
+    monkeypatch.setattr(openrouter, "run_standard_analysis", lambda *args: calls.append(args) or {
+        "result_path": "result", "report_path": "report", "classifications_path": "csv",
+    })
+
+    assert main(["prepare", "--input", str(input_path)]) == 0
+    assert calls == [(str(input_path), str(tmp_path / "support-analysis"), "router-key", "vendor/model", 3)]
+    assert "Анализ завершён" in capsys.readouterr().out
+
+
+def test_prepare_monitoring_command_uses_one_openrouter_analysis_when_key_is_configured(tmp_path, monkeypatch, capsys):
+    from intercom_exporter import openrouter
+
+    week_dir, day_dir = tmp_path / "last_week", tmp_path / "last_day"
+    week_dir.mkdir()
+    day_dir.mkdir()
+    week_path, day_path = week_dir / "conversations.json", day_dir / "conversations.json"
+    rows = sample_conversations()
+    week_path.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
+    day_path.write_text(json.dumps(rows[:1], ensure_ascii=False), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "router-key")
+    monkeypatch.setenv("OPENROUTER_MODEL", "vendor/model")
+    monkeypatch.setenv("OPENROUTER_WORKERS", "3")
+    calls = []
+    monkeypatch.setattr(openrouter, "run_monitoring_analysis", lambda *args: calls.append(args) or {
+        "result_path": "result", "report_path": "report", "classifications_path": "csv",
+    })
+
+    assert main(["prepare-monitoring", "--week", str(week_path), "--day", str(day_path)]) == 0
+    assert calls == [(str(week_path), str(day_path), str(tmp_path / "support-analysis"), "router-key", "vendor/model", 3)]
+    assert "Анализ завершён" in capsys.readouterr().out
 
 def test_prepare_monitoring_creates_two_inputs_and_one_shared_prompt(tmp_path):
     from intercom_exporter.support_analysis import prepare_monitoring_analysis
@@ -342,7 +392,7 @@ def test_monitoring_report_rejects_wrong_window_fingerprint(tmp_path):
         generate_monitoring_report(week_path, day_path, result_path)
 
 
-def test_cli_prepare_monitoring_and_report_monitoring_use_one_shared_output(tmp_path, capsys):
+def test_cli_prepare_monitoring_and_report_monitoring_use_one_shared_output(tmp_path, capsys, monkeypatch):
     from intercom_exporter.support_analysis import _build_payload
 
     week_rows = sample_conversations()
@@ -351,6 +401,10 @@ def test_cli_prepare_monitoring_and_report_monitoring_use_one_shared_output(tmp_
     week_path.write_text(json.dumps(week_rows, ensure_ascii=False), encoding="utf-8")
     day_path.write_text(json.dumps(day_rows, ensure_ascii=False), encoding="utf-8")
     output_dir = tmp_path / "combined-analysis"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    from intercom_exporter import config
+    monkeypatch.setattr(config, "load_openrouter_settings", lambda: None)
     assert main(["prepare-monitoring", "--week", str(week_path), "--day", str(day_path), "--output", str(output_dir)]) == 0
     result = valid_result(_build_payload(week_rows)["dataset_fingerprint"])
     result["period_analysis"] = {

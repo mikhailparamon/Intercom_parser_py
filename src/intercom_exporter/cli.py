@@ -8,6 +8,7 @@ from .config import load_config
 from .dates import DateRange, default_range, parse_date_range
 from .exporter import ConversationExporter, format_duration, resolve_timezone
 from .monitoring import build_monitoring_windows, run_monitoring
+from .openrouter import OpenRouterError, run_monitoring_analysis, run_standard_analysis
 from .support_analysis import AnalysisError, prepare_analysis, prepare_monitoring_analysis
 
 
@@ -46,7 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Часовой пояс временных полей: UTC, IANA (например Europe/Moscow) или unix")
     parser.add_argument("--dry-run", action="store_true", help="Показать период и базовое имя каталога без запросов к API")
     parser.add_argument("--skip-analysis", action="store_true",
-                        help="Не подготавливать файлы для ChatGPT после экспорта или мониторинговых срезов")
+                        help="Отключить подготовку файлов и автоматический AI-анализ после экспорта")
     parser.add_argument("--verbose", action="store_true", help="Подробное логирование без содержимого переписок")
     return parser
 
@@ -116,6 +117,27 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{label}: {snapshot['conversation_count']} обращений. Каталог: {snapshot['output_dir']}")
         if result["analysis"]:
             print(f"Общие файлы для анализа обоих периодов: {result['analysis']['output_dir']}")
+            if getattr(config, "openrouter_api_key", None):
+                print("Выполняется анализ через OpenRouter...")
+                try:
+                    ai_result = run_monitoring_analysis(
+                        Path(result["snapshots"]["last_week"]["output_dir"]) / "conversations.json",
+                        Path(result["snapshots"]["last_day"]["output_dir"]) / "conversations.json",
+                        result["analysis"]["output_dir"],
+                        config.openrouter_api_key,
+                        getattr(config, "openrouter_model", "anthropic/claude-sonnet-4.5"),
+                        getattr(config, "openrouter_workers", 3),
+                    )
+                except OpenRouterError as exc:
+                    logging.error("Автоматический анализ не выполнен: %s", exc)
+                    logging.error("Входные файлы и PROMPT.md доступны: %s", result["analysis"]["output_dir"])
+                    return 1
+                print(
+                    f"Анализ завершён через OpenRouter. Результат: {ai_result['result_path']}; "
+                    f"отчёт: {ai_result['report_path']}; CSV: {ai_result['classifications_path']}"
+                )
+            else:
+                print("OPENROUTER_API_KEY не задан; подготовлены файлы для ручного анализа в ChatGPT.")
         if args.skip_analysis:
             print("Подготовка данных для ChatGPT отключена параметром --skip-analysis.")
         return 0 if export_result["status"] == "success" else 1
@@ -140,6 +162,24 @@ def main(argv: list[str] | None = None) -> int:
             logging.error("Не удалось подготовить данные для ChatGPT: %s", exc)
             return 1
         print(f"Данные подготовлены. Обращений: {analysis['conversation_count']}. Файлы: {analysis['output_dir']}")
+        if getattr(config, "openrouter_api_key", None):
+            print("Выполняется анализ через OpenRouter...")
+            try:
+                ai_result = run_standard_analysis(
+                    input_path, analysis["output_dir"], config.openrouter_api_key,
+                    getattr(config, "openrouter_model", "anthropic/claude-sonnet-4.5"),
+                    getattr(config, "openrouter_workers", 3),
+                )
+            except OpenRouterError as exc:
+                logging.error("Автоматический анализ не выполнен: %s", exc)
+                logging.error("Входной JSON и PROMPT.md доступны: %s", analysis["output_dir"])
+                return 1
+            print(
+                f"Анализ завершён через OpenRouter. Результат: {ai_result['result_path']}; "
+                f"отчёт: {ai_result['report_path']}; CSV: {ai_result['classifications_path']}"
+            )
+        else:
+            print("OPENROUTER_API_KEY не задан; подготовлены файлы для ручного анализа в ChatGPT.")
     elif args.skip_analysis:
         print("Подготовка данных для ChatGPT отключена параметром --skip-analysis.")
     else:

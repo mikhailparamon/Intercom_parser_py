@@ -636,7 +636,7 @@ def generate_monitoring_report(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Подготовка и проверка крупного анализа обращений через ChatGPT")
+    parser = argparse.ArgumentParser(description="Подготовка, AI-анализ и проверка результатов по обращениям поддержки")
     subparsers = parser.add_subparsers(dest="command", required=True)
     prepare = subparsers.add_parser("prepare", help="Очистить и подготовить набор для ChatGPT")
     prepare.add_argument("--input", required=True, help="Исходный conversations.json или conversations.jsonl")
@@ -665,6 +665,21 @@ def main(argv: list[str] | None = None) -> int:
             result = prepare_analysis(args.input, args.output)
             size_mb = result["input_file_bytes"] / (1024 * 1024)
             print(f"Подготовлено обращений: {result['conversation_count']}; сообщений: {result['message_count']}; размер JSON: {size_mb:.1f} МБ. Файлы для ChatGPT: {result['output_dir']}")
+            from .config import load_openrouter_settings
+            from .openrouter import run_standard_analysis
+
+            settings = load_openrouter_settings()
+            if settings:
+                print(f"Выполняется анализ через OpenRouter ({settings.model})...")
+                ai_result = run_standard_analysis(
+                    args.input, result["output_dir"], settings.api_key, settings.model, settings.workers,
+                )
+                print(
+                    f"Анализ завершён. Результат: {ai_result['result_path']}; "
+                    f"отчёт: {ai_result['report_path']}; CSV: {ai_result['classifications_path']}"
+                )
+            else:
+                print("OPENROUTER_API_KEY не задан; входной JSON и PROMPT.md готовы для ChatGPT.")
         elif args.command == "report":
             result = generate_report(args.input, args.result, args.output)
             print(f"Отчёт сохранён: {result['report_path']}. Разметка: {result['classifications_path']}")
@@ -675,6 +690,21 @@ def main(argv: list[str] | None = None) -> int:
                 f"({result['day_conversation_count']}), уникальных ID: {result['unique_conversation_count']}. "
                 f"Один PROMPT.md и оба входных JSON: {result['output_dir']}"
             )
+            from .config import load_openrouter_settings
+            from .openrouter import run_monitoring_analysis
+
+            settings = load_openrouter_settings()
+            if settings:
+                print(f"Выполняется анализ через OpenRouter ({settings.model})...")
+                ai_result = run_monitoring_analysis(
+                    args.week, args.day, result["output_dir"], settings.api_key, settings.model, settings.workers,
+                )
+                print(
+                    f"Анализ завершён. Результат: {ai_result['result_path']}; "
+                    f"отчёт: {ai_result['report_path']}; CSV: {ai_result['classifications_path']}"
+                )
+            else:
+                print("OPENROUTER_API_KEY не задан; JSON-файлы и PROMPT.md готовы для ChatGPT.")
         else:
             result = generate_monitoring_report(args.week, args.day, args.result, args.output)
             print(f"Единый отчёт сохранён: {result['report_path']}. Разметка: {result['classifications_path']}")
