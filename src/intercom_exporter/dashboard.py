@@ -228,7 +228,8 @@ document.getElementById("kpis").innerHTML = kpis.map(([label, value, sub]) =>
   if (!rows.length) { el.textContent = "Нет данных по датам"; return; }
   const W = 900, H = 280, PL = 56, PR = 24, PT = 24, PB = 48;
   const max = Math.max(...rows.map(r => r.count), 1);
-  const tickStep = Math.max(1, Math.ceil(max / 4));
+  const raw = max / 4, mag = Math.pow(10, Math.floor(Math.log10(raw))), norm = raw / mag;
+  const tickStep = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * mag;
   const yMax = tickStep * Math.ceil(max / tickStep);
   const x = i => PL + i * (W - PL - PR) / (rows.length - 1 || 1);
   const y = v => PT + (1 - v / yMax) * (H - PT - PB);
