@@ -113,10 +113,10 @@ def test_prepare_creates_chatgpt_input_prompt_and_keeps_real_ids(tmp_path):
     assert "таксономия, правила и итоговые проверки должны быть общими" in prompt.lower()
     assert "приоритеты между близкими темами" in prompt.lower()
     assert "обязательный второй проход по всем неопределённым" in prompt.lower()
-    assert "как безопасно уменьшать «недостаточно данных»" in prompt.lower()
+    assert "как безопасно уменьшать долю неклассифицируемых" in prompt.lower()
     assert "предыдущая разметка" in prompt.lower()
     assert "сопоставь её с новым входом **по id**" in prompt.lower()
-    assert "подписка и отмена / возврат по подписке" in prompt.lower()
+    assert "оплата и управление подпиской" in prompt.lower()
     assert "не оптимизируй процент за счёт догадок" in prompt.lower()
     assert "processed_count" in prompt
     assert "содержательного клиентского текста нет" in prompt.lower()
