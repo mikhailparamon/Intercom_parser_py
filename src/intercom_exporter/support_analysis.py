@@ -308,6 +308,14 @@ def _monitoring_prompt(week: dict, day: dict, combined: dict, week_bytes: int, d
 """
 
 
+def _default_monitoring_output(week_path: Path, day_path: Path) -> Path:
+    """Каталог анализа по умолчанию: <общий родитель>/support-analysis для стандартной
+    раскладки last_week/last_day, иначе support-analysis рядом с недельным файлом."""
+    if week_path.parent.name == "last_week" and day_path.parent.name == "last_day" and week_path.parent.parent == day_path.parent.parent:
+        return week_path.parent.parent / "support-analysis"
+    return week_path.parent / "support-analysis"
+
+
 def prepare_monitoring_analysis(
     week_input_path: str | Path,
     day_input_path: str | Path,
@@ -326,10 +334,8 @@ def prepare_monitoring_analysis(
     combined_payload = _build_payload(union_rows)
     if output_dir:
         output = Path(output_dir)
-    elif week_path.parent.name == "last_week" and day_path.parent.name == "last_day" and week_path.parent.parent == day_path.parent.parent:
-        output = week_path.parent.parent / "support-analysis"
     else:
-        output = week_path.parent / "support-analysis"
+        output = _default_monitoring_output(week_path, day_path)
     week_file = output / "chatgpt_input_week.json"
     day_file = output / "chatgpt_input_day.json"
     _write_json(week_file, week_payload)
@@ -620,10 +626,8 @@ def generate_monitoring_report(
 
     if output_dir:
         output = Path(output_dir)
-    elif week_path.parent.name == "last_week" and day_path.parent.name == "last_day" and week_path.parent.parent == day_path.parent.parent:
-        output = week_path.parent.parent / "support-analysis"
     else:
-        output = week_path.parent / "support-analysis"
+        output = _default_monitoring_output(week_path, day_path)
     report_path = output / "report.md"
     _write_text(report_path, report_markdown)
     csv_path = output / "classifications.csv"
@@ -741,7 +745,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"({result['day_conversation_count']}), уникальных ID: {result['unique_conversation_count']}. "
                 f"Один PROMPT.md и оба входных JSON: {result['output_dir']}"
             )
-            if not args.no_agents:
+            if not args.no_agents and not args.analyze:
                 from .agents_orchestration import prepare_agents_bundle
 
                 bundle = prepare_agents_bundle(args.week, args.day, result["output_dir"], workers=args.workers)
@@ -766,12 +770,7 @@ def main(argv: list[str] | None = None) -> int:
             from .agents_orchestration import merge_agents_results
 
             week_path, day_path = Path(args.week), Path(args.day)
-            if args.output:
-                output = Path(args.output)
-            elif week_path.parent.name == "last_week" and day_path.parent.name == "last_day" and week_path.parent.parent == day_path.parent.parent:
-                output = week_path.parent.parent / "support-analysis"
-            else:
-                output = week_path.parent / "support-analysis"
+            output = Path(args.output) if args.output else _default_monitoring_output(week_path, day_path)
             result = merge_agents_results(week_path, day_path, output, compare_with=args.compare_with)
             print(
                 f"Слито классификаций: {result['unique_conversation_count']}. Результат: {result['result_path']}. "
