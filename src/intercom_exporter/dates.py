@@ -21,6 +21,44 @@ class DateRange:
         start, end = self.epoch_bounds()
         return start <= int(epoch_seconds) < end
 
+    @property
+    def slug(self) -> str:
+        return f"{self.start.isoformat()}_{self.end.isoformat()}"
+
+
+def _ensure_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+@dataclass(frozen=True)
+class DateTimeRange:
+    """Скользящий период с точностью до секунды; границы хранятся в UTC."""
+
+    start: datetime
+    end: datetime
+
+    def __post_init__(self):
+        start = _ensure_utc(self.start)
+        end = _ensure_utc(self.end)
+        object.__setattr__(self, "start", start)
+        object.__setattr__(self, "end", end)
+        if end <= start:
+            raise ValueError("Момент окончания должен быть позже момента начала")
+
+    def epoch_bounds(self) -> tuple[int, int]:
+        return int(self.start.timestamp()), int(self.end.timestamp())
+
+    def contains(self, epoch_seconds: int) -> bool:
+        start, end = self.epoch_bounds()
+        return start <= int(epoch_seconds) < end
+
+    @property
+    def slug(self) -> str:
+        stamp = "%Y%m%dT%H%M%SZ"
+        return f"{self.start.strftime(stamp)}_{self.end.strftime(stamp)}"
+
 
 def parse_date_range(start: str | None, end: str | None) -> DateRange:
     if (start is None) != (end is None):
