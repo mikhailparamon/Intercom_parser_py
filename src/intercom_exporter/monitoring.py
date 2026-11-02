@@ -76,7 +76,9 @@ def _write_json(path: Path, value: Any) -> None:
 
 def create_monitoring_snapshots(
     export_result: dict[str, Any],
-    windows: dict[str, DateRange],
+    windows: dict[str, DateTimeRange],
+    *,
+    source_window: str = "backup_3_months",
 ) -> dict[str, dict[str, Any]]:
     export_dir = Path(export_result["output_dir"])
     source_path = export_dir / "conversations.json"
@@ -91,7 +93,7 @@ def create_monitoring_snapshots(
 
     results: dict[str, dict[str, Any]] = {}
     for name, window in windows.items():
-        selected = rows if name == "backup_3_months" else [
+        selected = rows if name == source_window else [
             row for row in rows if record_has_activity_in_range(row, window)
         ]
         snapshot_dir = export_dir / name
@@ -130,17 +132,21 @@ def run_monitoring(
     exporter,
     output_root: str | Path,
     *,
-    windows: dict[str, DateRange] | None = None,
+    full_archive: bool = False,
+    windows: dict[str, DateTimeRange] | None = None,
     api_version: str = "unknown",
     timezone_name: str = "UTC",
     prepare: Callable | None = prepare_monitoring_analysis,
 ) -> dict[str, Any]:
     window_set = windows or build_monitoring_windows()
+    source_name = "backup_3_months" if full_archive else "last_week"
     export_result = exporter.run(
-        window_set["backup_3_months"], output_root,
+        window_set[source_name], output_root,
         api_version=api_version, selection="all", fields="all", timezone_name=timezone_name,
     )
-    snapshots = create_monitoring_snapshots(export_result, window_set)
+    snapshot_names = ("backup_3_months", "last_week", "last_day") if full_archive else ("last_week", "last_day")
+    snapshot_windows = {name: window_set[name] for name in snapshot_names}
+    snapshots = create_monitoring_snapshots(export_result, snapshot_windows, source_window=source_name)
     week_count = snapshots["last_week"]["conversation_count"]
     day_count = snapshots["last_day"]["conversation_count"]
     analysis = None

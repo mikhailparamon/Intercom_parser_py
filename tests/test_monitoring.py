@@ -1,11 +1,16 @@
 import json
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
 from intercom_exporter.dates import DateRange, DateTimeRange
-from intercom_exporter.monitoring import build_monitoring_windows, create_monitoring_snapshots, record_has_activity_in_range
+from intercom_exporter.monitoring import (
+    build_monitoring_windows,
+    create_monitoring_snapshots,
+    record_has_activity_in_range,
+    run_monitoring,
+)
 
 
 def test_monitoring_windows_roll_from_exact_launch_moment():
@@ -105,7 +110,7 @@ def test_run_monitoring_uses_one_full_fields_export_with_api_version(tmp_path):
             return {"output_dir": str(export_dir), "status": "success", "error_count": 0}
 
     result = run_monitoring(
-        FakeExporter(), tmp_path, windows=windows, api_version="2.17", prepare=None
+        FakeExporter(), tmp_path, full_archive=True, windows=windows, api_version="2.17", prepare=None
     )
 
     assert len(calls) == 1
@@ -137,7 +142,7 @@ def test_run_monitoring_prepares_one_shared_analysis_from_both_windows(tmp_path)
         calls.append((Path(week_path), Path(day_path), Path(output_dir)))
         return prepare_monitoring_analysis(week_path, day_path, output_dir)
 
-    result = run_monitoring(FakeExporter(), tmp_path, windows=windows, prepare=prepare)
+    result = run_monitoring(FakeExporter(), tmp_path, full_archive=True, windows=windows, prepare=prepare)
 
     assert len(calls) == 1
     assert calls[0][0].name == "conversations.json"
@@ -148,3 +153,83 @@ def test_run_monitoring_prepares_one_shared_analysis_from_both_windows(tmp_path)
     assert (calls[0][2] / "chatgpt_input_week.json").is_file()
     assert (calls[0][2] / "chatgpt_input_day.json").is_file()
     assert (calls[0][2] / "PROMPT.md").is_file()
+
+
+def test_create_snapshots_without_archive_filters_week_and_day_from_week_export(tmp_path):
+    export_dir = tmp_path / "run"
+    export_dir.mkdir()
+    rows = [
+        {"id": "week-only", "created_at": "2026-10-28T08:00:00Z", "updated_at": "2026-10-28T08:00:00Z"},
+        {"id": "day", "created_at": "2026-10-25T00:00:00Z", "updated_at": "2026-10-31T11:00:00Z"},
+    ]
+    (export_dir / "conversations.json").write_text(json.dumps(rows), encoding="utf-8")
+    (export_dir / "manifest.json").write_text(json.dumps({"status": "success", "error_count": 0}), encoding="utf-8")
+    all_windows = build_monitoring_windows(datetime(2026, 10, 31, 12, 0, 0, tzinfo=timezone.utc))
+    windows = {"last_week": all_windows["last_week"], "last_day": all_windows["last_day"]}
+
+    result = create_monitoring_snapshots(
+        {"output_dir": str(export_dir), "status": "success", "error_count": 0},
+        windows,
+        source_window="last_week",
+    )
+
+    week = json.loads((export_dir / "last_week" / "conversations.json").read_text(encoding="utf-8"))
+    day = json.loads((export_dir / "last_day" / "conversations.json").read_text(encoding="utf-8"))
+    assert [row["id"] for row in week] == ["week-only", "day"]
+    assert [row["id"] for row in day] == ["day"]
+    assert not (export_dir / "backup_3_months").exists()
+    assert result["last_week"]["conversation_count"] == 2
+    assert result["last_day"]["conversation_count"] == 1
+
+
+def test_run_monitoring_without_archive_exports_only_week_window(tmp_path):
+    windows = build_monitoring_windows(datetime(2026, 10, 31, 12, tzinfo=timezone.utc))
+    calls = []
+
+    class FakeExporter:
+        def run(self, period, output_root, **kwargs):
+            calls.append(period)
+            export_dir = Path(output_root) / period.slug
+            export_dir.mkdir(parents=True)
+            (export_dir / "conversations.json").write_text("[]", encoding="utf-8")
+            (export_dir / "manifest.json").write_text(json.dumps({"status": "success"}), encoding="utf-8")
+            return {"output_dir": str(export_dir), "status": "success", "error_count": 0}
+
+    result = run_monitoring(FakeExporter(), tmp_path, windows=windows, prepare=None)
+
+    assert calls == [windows["last_week"]]
+    assert set(result["snapshots"]) == {"last_week", "last_day"}
+
+
+def test_run_monitoring_with_full_archive_exports_backup_window(tmp_path):
+    windows = build_monitoring_windows(datetime(2026, 10, 31, 12, tzinfo=timezone.utc))
+    calls = []
+
+    class FakeExporter:
+        def run(self, period, output_root, **kwargs):
+            calls.append(period)
+            export_dir = Path(output_root) / period.slug
+            export_dir.mkdir(parents=True)
+            (export_dir / "conversations.json").write_text("[]", encoding="utf-8")
+            (export_dir / "manifest.json").write_text(json.dumps({"status": "success"}), encoding="utf-8")
+            return {"output_dir": str(export_dir), "status": "success", "error_count": 0}
+
+    result = run_monitoring(FakeExporter(), tmp_path, windows=windows, full_archive=True, prepare=None)
+
+    assert calls == [windows["backup_3_months"]]
+    assert set(result["snapshots"]) == {"backup_3_months", "last_week", "last_day"}
+
+
+@pytest.mark.parametrize(
+    "now",
+    [
+        datetime(2026, 11, 2, 8, 0, 0),
+        datetime(2026, 11, 2, 11, 0, 0, tzinfo=timezone(timedelta(hours=3))),
+    ],
+)
+def test_monitoring_windows_normalize_input_to_utc(now):
+    windows = build_monitoring_windows(now)
+    assert windows["last_day"] == DateTimeRange(
+        datetime(2026, 11, 1, 8, tzinfo=timezone.utc),
+        datetime(2026, 11, 2, 8, tzinfo=timezone.utc),
+    )
