@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from .agents_orchestration import TAXONOMY
 from .support_analysis import _write_text
 
 PALETTE = [
@@ -106,7 +107,7 @@ def build_dashboard_data(
     top = week_categories[0] if week_categories else {"name": "—", "count": 0, "share": 0.0}
     billing_week = sum(
         entry["count"] for entry in week_categories
-        if entry["name"] == "Оплата и управление подпиской"
+        if entry["name"] == TAXONOMY[4]["name"]
     )
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
