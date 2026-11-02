@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from .activity import has_meaningful_activity
 from .dates import DateRange, DateTimeRange
 from .storage import JsonStore
 
@@ -130,23 +131,24 @@ class ConversationExporter:
                                 available_count = len(parts) + (1 if detail.get("source") else 0)
                                 truncated = expected_parts > available_count or response_part_count > len(parts)
 
-                                part_matches = any(
-                                    isinstance(part, dict) and in_period(part.get("created_at"))
-                                    for part in parts
-                                )
                                 created_at = candidate.get("created_at", detail.get("created_at"))
+                                conv_for_check = {
+                                    "created_at": created_at if created_at is not None else detail.get("created_at"),
+                                    "conversation_parts": parts,
+                                }
+                                start_epoch, end_epoch = date_range.epoch_bounds()
                                 created_matches = in_period(created_at) or in_period(detail.get("created_at"))
-                                updated_matches = in_period(candidate.get("updated_at")) or in_period(detail.get("updated_at"))
+                                meaningful = has_meaningful_activity(conv_for_check, start_epoch, end_epoch)
                                 if selection == "new":
                                     selected = created_matches
                                 elif selection == "updated":
                                     try:
-                                        is_old = created_at is not None and int(created_at) < date_range.epoch_bounds()[0]
+                                        is_old = created_at is not None and int(created_at) < start_epoch
                                     except (TypeError, ValueError, OverflowError):
                                         is_old = False
-                                    selected = is_old and (updated_matches or part_matches)
+                                    selected = is_old and meaningful
                                 else:
-                                    selected = created_matches or updated_matches or part_matches
+                                    selected = created_matches or meaningful
                                 if not selected:
                                     if truncated and selection != "new" and not created_matches:
                                         known_count = max(expected_parts, response_part_count + (1 if detail.get("source") else 0))

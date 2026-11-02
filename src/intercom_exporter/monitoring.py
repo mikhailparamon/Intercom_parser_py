@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from .activity import has_meaningful_activity
 from .dates import DateRange, DateTimeRange
 from .support_analysis import prepare_monitoring_analysis
 
@@ -27,44 +28,9 @@ def build_monitoring_windows(now: datetime | None = None) -> dict[str, DateTimeR
     }
 
 
-def _timestamp_epoch(value: Any) -> int | None:
-    if isinstance(value, bool) or value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return int(value)
-    if not isinstance(value, str):
-        return None
-    try:
-        return int(value)
-    except ValueError:
-        pass
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return int(parsed.astimezone(timezone.utc).timestamp())
-
-
-def _activity_timestamps(conversation: dict[str, Any]):
-    yield conversation.get("created_at")
-    yield conversation.get("updated_at")
-    parts = conversation.get("conversation_parts") or []
-    if isinstance(parts, dict):
-        parts = parts.get("conversation_parts") or []
-    if isinstance(parts, list):
-        for part in parts:
-            if isinstance(part, dict):
-                yield part.get("created_at")
-
-
 def record_has_activity_in_range(conversation: dict[str, Any], date_range: DateRange | DateTimeRange) -> bool:
     start, end = date_range.epoch_bounds()
-    return any(
-        (timestamp := _timestamp_epoch(value)) is not None and start <= timestamp < end
-        for value in _activity_timestamps(conversation)
-    )
+    return has_meaningful_activity(conversation, start, end)
 
 
 def _write_json(path: Path, value: Any) -> None:

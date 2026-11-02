@@ -73,13 +73,13 @@ def test_export_fetches_details_concurrently_with_bounded_workers(tmp_path):
     assert [row["id"] for row in rows] == [item["id"] for item in candidates]
 
 
-def test_export_includes_created_or_updated_and_preserves_out_of_range_parts(tmp_path):
+def test_export_includes_created_or_meaningfully_active_and_preserves_out_of_range_parts(tmp_path):
     period = DateRange(date(2026, 7, 1), date(2026, 10, 1))
     start, end = period.epoch_bounds()
     client = FakeClient(
         [candidate("updated", start - 1, updated_at=start + 1), candidate("start", start),
          candidate("closed-later", start + 5, closed_at=end + 10), candidate("at-end", end, updated_at=end + 10)],
-        {"updated": detail("updated", [], created_at=start - 1, updated_at=start + 1),
+        {"updated": detail("updated", [{"id": "reply", "part_type": "comment", "created_at": start + 1}], created_at=start - 1, updated_at=start + 1),
          "start": detail("start", [{"id": "before", "created_at": start - 1}, {"id": "after", "created_at": end + 1}]),
          "closed-later": detail("closed-later", []),
          "at-end": detail("at-end", [], created_at=end, updated_at=end + 10)},
@@ -185,18 +185,21 @@ def test_export_includes_created_updated_or_continued_conversations(tmp_path):
     ]
     details = {
         "created": detail("created", []),
-        "updated": detail("updated", [{"id": "outside", "created_at": end + 10}], created_at=start - 100, updated_at=start + 1),
+        "updated": detail("updated", [{"id": "reply", "part_type": "comment", "created_at": start + 1}], created_at=start - 100, updated_at=start + 1),
         "continued": detail("continued", [
-            {"id": "assignment", "part_type": "assignment", "created_at": start},
+            {"id": "reply", "part_type": "comment", "created_at": start},
             {"id": "later", "part_type": "comment", "created_at": end + 10},
         ], created_at=start - 100, updated_at=end + 100),
-        "unrelated": detail("unrelated", [{"id": "outside-only", "created_at": end + 10}], created_at=start - 100, updated_at=end + 200),
+        "unrelated": detail("unrelated", [
+            {"id": "sys", "part_type": "bulk_reassignment", "created_at": start + 5},
+            {"id": "outside-only", "created_at": end + 10},
+        ], created_at=start - 100, updated_at=end + 200),
     }
     result = ConversationExporter(FakeClient(candidates, details)).run(period, tmp_path, fields="all")
     rows = json.loads((tmp_path / "2026-07-01_2026-10-01" / "conversations.json").read_text(encoding="utf-8"))
     assert {row["id"] for row in rows} == {"created", "updated", "continued"}
     continued = next(row for row in rows if row["id"] == "continued")
-    assert [part["id"] for part in continued["conversation_parts"]["conversation_parts"]] == ["assignment", "later"]
+    assert [part["id"] for part in continued["conversation_parts"]["conversation_parts"]] == ["reply", "later"]
     assert result["found_count"] == 3
 
 
@@ -206,8 +209,8 @@ def test_part_period_is_start_inclusive_and_end_exclusive(tmp_path):
     candidates = [candidate("at-start", start - 1, updated_at=end + 1),
                  candidate("at-end", start - 1, updated_at=end + 2)]
     details = {
-        "at-start": detail("at-start", [{"id": "start", "created_at": start}], created_at=start - 1, updated_at=end + 1),
-        "at-end": detail("at-end", [{"id": "end", "created_at": end}], created_at=start - 1, updated_at=end + 2),
+        "at-start": detail("at-start", [{"id": "start", "part_type": "comment", "created_at": start}], created_at=start - 1, updated_at=end + 1),
+        "at-end": detail("at-end", [{"id": "end", "part_type": "comment", "created_at": end}], created_at=start - 1, updated_at=end + 2),
     }
     ConversationExporter(FakeClient(candidates, details)).run(period, tmp_path)
     rows = json.loads((tmp_path / "2026-07-01_2026-10-01" / "conversations.json").read_text(encoding="utf-8"))
@@ -248,14 +251,15 @@ def test_selection_modes_include_only_the_requested_conversation_types(tmp_path)
     ]
     details = {
         "new": detail("new", [], created_at=start + 1, updated_at=start + 3),
-        "updated": detail("updated", [], created_at=start - 1, updated_at=start + 2),
+        "updated": detail("updated", [{"part_type": "comment", "created_at": start + 2}],
+                          created_at=start - 1, updated_at=start + 2),
         "continued": detail("continued", [{"part_type": "assignment", "created_at": start + 4}],
                             created_at=start - 1, updated_at=start + 20),
     }
     for selection, expected in {
         "new": {"new"},
-        "updated": {"updated", "continued"},
-        "all": {"new", "updated", "continued"},
+        "updated": {"updated"},
+        "all": {"new", "updated"},
     }.items():
         output_root = tmp_path / selection
         ConversationExporter(FakeClient(candidates, details)).run(period, output_root, selection=selection)

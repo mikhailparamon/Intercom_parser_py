@@ -33,12 +33,13 @@ def test_monitoring_archive_clamps_day_when_target_month_is_short(now, expected_
     assert build_monitoring_windows(now)["backup_3_months"].start == expected_start
 
 
-def test_activity_window_includes_created_updated_and_part_timestamps():
+def test_activity_window_includes_created_and_meaningful_part_timestamps():
     period = DateRange(date(2026, 10, 24), date(2026, 10, 31))
 
     assert record_has_activity_in_range({"created_at": "2026-10-24T00:00:00Z"}, period)
-    assert record_has_activity_in_range({"created_at": "2026-10-01T00:00:00Z", "updated_at": "2026-10-30T12:00:00Z"}, period)
-    assert record_has_activity_in_range({"created_at": "2026-10-01T00:00:00Z", "conversation_parts": {"conversation_parts": [{"created_at": "2026-10-30T12:00:00Z"}]}}, period)
+    assert record_has_activity_in_range({"created_at": "2026-10-01T00:00:00Z", "conversation_parts": {"conversation_parts": [{"part_type": "comment", "created_at": "2026-10-30T12:00:00Z"}]}}, period)
+    assert not record_has_activity_in_range({"created_at": "2026-10-01T00:00:00Z", "updated_at": "2026-10-30T12:00:00Z"}, period)
+    assert not record_has_activity_in_range({"created_at": "2026-10-01T00:00:00Z", "conversation_parts": {"conversation_parts": [{"part_type": "bulk_reassignment", "created_at": "2026-10-30T12:00:00Z"}]}}, period)
     assert not record_has_activity_in_range({"created_at": "2026-10-23T23:59:59Z", "updated_at": "2026-10-31T00:00:00Z"}, period)
 
 
@@ -46,8 +47,10 @@ def test_create_monitoring_snapshots_preserves_archive_and_writes_window_files(t
     export_dir = tmp_path / "2026-07-31_2026-10-31_run_20261031T120000Z"
     export_dir.mkdir()
     rows = [
-        {"id": "old-week", "created_at": "2026-07-01T00:00:00Z", "updated_at": "2026-10-24T00:00:00Z", "private_field": "kept"},
-        {"id": "old-day", "created_at": "2026-06-01T00:00:00Z", "updated_at": "2026-10-30T12:00:00Z"},
+        {"id": "old-week", "created_at": "2026-07-01T00:00:00Z", "updated_at": "2026-10-24T00:00:00Z", "private_field": "kept",
+         "conversation_parts": {"conversation_parts": [{"part_type": "comment", "created_at": "2026-10-24T00:00:00Z"}]}},
+        {"id": "old-day", "created_at": "2026-06-01T00:00:00Z", "updated_at": "2026-10-30T12:00:00Z",
+         "conversation_parts": {"conversation_parts": [{"part_type": "comment", "created_at": "2026-10-30T12:00:00Z"}]}},
         {"id": "today", "created_at": "2026-10-31T00:00:00Z", "updated_at": "2026-10-31T00:00:00Z"},
         {"id": "old", "created_at": "2026-06-01T00:00:00Z", "updated_at": "2026-07-01T00:00:00Z"},
     ]
@@ -160,7 +163,8 @@ def test_create_snapshots_without_archive_passes_week_through_and_filters_day(tm
     export_dir.mkdir()
     rows = [
         {"id": "week-only", "created_at": "2026-10-28T08:00:00Z", "updated_at": "2026-10-28T08:00:00Z"},
-        {"id": "day", "created_at": "2026-10-25T00:00:00Z", "updated_at": "2026-10-31T11:00:00Z"},
+        {"id": "day", "created_at": "2026-10-25T00:00:00Z", "updated_at": "2026-10-31T11:00:00Z",
+         "conversation_parts": {"conversation_parts": [{"part_type": "comment", "created_at": "2026-10-31T11:00:00Z"}]}},
         {"id": "stale", "created_at": "2026-10-20T00:00:00Z", "updated_at": "2026-10-20T00:00:00Z"},
     ]
     (export_dir / "conversations.json").write_text(json.dumps(rows), encoding="utf-8")
