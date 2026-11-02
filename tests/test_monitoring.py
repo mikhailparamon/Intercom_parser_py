@@ -155,12 +155,13 @@ def test_run_monitoring_prepares_one_shared_analysis_from_both_windows(tmp_path)
     assert (calls[0][2] / "PROMPT.md").is_file()
 
 
-def test_create_snapshots_without_archive_filters_week_and_day_from_week_export(tmp_path):
+def test_create_snapshots_without_archive_passes_week_through_and_filters_day(tmp_path):
     export_dir = tmp_path / "run"
     export_dir.mkdir()
     rows = [
         {"id": "week-only", "created_at": "2026-10-28T08:00:00Z", "updated_at": "2026-10-28T08:00:00Z"},
         {"id": "day", "created_at": "2026-10-25T00:00:00Z", "updated_at": "2026-10-31T11:00:00Z"},
+        {"id": "stale", "created_at": "2026-10-20T00:00:00Z", "updated_at": "2026-10-20T00:00:00Z"},
     ]
     (export_dir / "conversations.json").write_text(json.dumps(rows), encoding="utf-8")
     (export_dir / "manifest.json").write_text(json.dumps({"status": "success", "error_count": 0}), encoding="utf-8")
@@ -175,10 +176,10 @@ def test_create_snapshots_without_archive_filters_week_and_day_from_week_export(
 
     week = json.loads((export_dir / "last_week" / "conversations.json").read_text(encoding="utf-8"))
     day = json.loads((export_dir / "last_day" / "conversations.json").read_text(encoding="utf-8"))
-    assert [row["id"] for row in week] == ["week-only", "day"]
+    assert [row["id"] for row in week] == ["week-only", "day", "stale"]
     assert [row["id"] for row in day] == ["day"]
     assert not (export_dir / "backup_3_months").exists()
-    assert result["last_week"]["conversation_count"] == 2
+    assert result["last_week"]["conversation_count"] == 3
     assert result["last_day"]["conversation_count"] == 1
 
 

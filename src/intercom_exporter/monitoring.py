@@ -59,7 +59,7 @@ def _activity_timestamps(conversation: dict[str, Any]):
                 yield part.get("created_at")
 
 
-def record_has_activity_in_range(conversation: dict[str, Any], date_range: DateRange) -> bool:
+def record_has_activity_in_range(conversation: dict[str, Any], date_range: DateRange | DateTimeRange) -> bool:
     start, end = date_range.epoch_bounds()
     return any(
         (timestamp := _timestamp_epoch(value)) is not None and start <= timestamp < end
