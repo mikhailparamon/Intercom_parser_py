@@ -73,7 +73,11 @@ def build_dashboard_data(
     week_period: str,
     day_period: str,
 ) -> dict:
-    """Собирает все агрегаты дашборда из провалидированных данных report-monitoring."""
+    """Собирает все агрегаты дашборда из провалидированных данных report-monitoring.
+
+    Параметр ``categories`` принимается для совместимости интерфейса с пайплайном
+    отчёта и зарезервирован на будущее — в агрегации он не используется.
+    """
     week_ids = {str(row["id"]) for row in week_rows}
     day_ids = {str(row["id"]) for row in day_rows}
     week_classifications = [item for item in classifications if item["id"] in week_ids]

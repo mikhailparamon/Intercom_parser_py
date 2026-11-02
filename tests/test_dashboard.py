@@ -64,3 +64,32 @@ def test_daily_series_covers_seven_days_ending_at_latest_activity():
         "2026-10-27", "2026-10-28", "2026-10-29", "2026-10-30", "2026-10-31", "2026-11-01", "2026-11-02",
     ]
     assert [item["count"] for item in data["daily"]] == [0, 0, 0, 0, 0, 1, 1]
+
+
+def test_cancel_week_counts_categories_with_cancellation_in_name():
+    data = build_dashboard_data(_week_rows(), _day_rows(), CATEGORIES, [
+        _classification("w1", "Подписка и отмена", "Хочет отменить", None),
+        _classification("w2", "Оплата", "Карта отклонена", None),
+        _classification("d1", "Подписка и отмена", "Возврат денег", None),
+    ], "w", "d")
+    assert data["kpis"]["cancel_week"] == 2
+
+
+def test_daily_series_empty_when_no_rows():
+    data = build_dashboard_data([], [], CATEGORIES, [], "w", "d")
+    assert data["daily"] == []
+    assert data["kpis"]["week_total"] == 0
+    assert data["kpis"]["top_category"] == "—"
+
+
+def test_daily_series_falls_back_to_created_at_when_updated_at_unparseable():
+    rows = [
+        {"id": "a", "created_at": "2026-11-01T10:00:00Z", "updated_at": "not-a-date"},
+        {"id": "b", "created_at": "2026-11-02T09:00:00Z"},
+    ]
+    data = build_dashboard_data(rows, [], CATEGORIES, [
+        _classification("a", "Оплата", "s", None),
+        _classification("b", "Оплата", "s", None),
+    ], "w", "d")
+    assert data["daily"][-1] == {"date": "2026-11-02", "count": 1}
+    assert data["daily"][-2] == {"date": "2026-11-01", "count": 1}
