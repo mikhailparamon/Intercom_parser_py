@@ -104,9 +104,9 @@ def build_dashboard_data(
         if item["severity"] == "high"
     ]
     top = week_categories[0] if week_categories else {"name": "—", "count": 0, "share": 0.0}
-    cancel_week = sum(
+    billing_week = sum(
         entry["count"] for entry in week_categories
-        if "отмен" in entry["name"].casefold() or "возврат" in entry["name"].casefold()
+        if entry["name"] == "Оплата и управление подпиской"
     )
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -118,7 +118,7 @@ def build_dashboard_data(
             "top_category": top["name"],
             "top_category_share": top["share"],
             "high_week": severity_week["high"],
-            "cancel_week": cancel_week,
+            "billing_week": billing_week,
         },
         "daily": _daily_series(week_rows),
         "week_categories": week_categories,
@@ -217,7 +217,7 @@ const kpis = [
   ["Обращений за день", DATA.kpis.day_total, ""],
   ["Топ-категория недели", DATA.kpis.top_category, DATA.kpis.top_category_share + "% недели"],
   ["Высокая тяжесть (неделя)", DATA.kpis.high_week, ""],
-  ["Подписка и отмена (неделя)", DATA.kpis.cancel_week, ""],
+  ["Оплата и подписка (неделя)", DATA.kpis.billing_week, ""],
 ];
 document.getElementById("kpis").innerHTML = kpis.map(([label, value, sub]) =>
   `<div class="kpi"><div class="label">${esc(label)}</div><div class="value">${esc(value)}</div><div class="sub">${esc(sub)}</div></div>`).join("");

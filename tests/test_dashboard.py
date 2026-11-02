@@ -6,7 +6,7 @@ from intercom_exporter.support_analysis import _build_payload, generate_monitori
 CATEGORIES = [
     {"name": "Подключение VPN", "description": "Проблемы с подключением"},
     {"name": "Оплата", "description": "Проблемы с оплатой"},
-    {"name": "Подписка и отмена", "description": "Отмена подписки и возвраты"},
+    {"name": "Оплата и управление подпиской", "description": "Оплата и подписка"},
 ]
 
 
@@ -50,7 +50,7 @@ def test_build_dashboard_data_counts_windows_categories_and_severity():
     assert data["kpis"]["top_category"] == "Подключение VPN"
     assert data["kpis"]["top_category_share"] == 66.7
     assert data["kpis"]["high_week"] == 1
-    assert data["kpis"]["cancel_week"] == 0
+    assert data["kpis"]["billing_week"] == 0
     assert data["week_categories"][0] == {"name": "Подключение VPN", "count": 2, "share": 66.7}
     assert data["day_categories"] == [{"name": "Подключение VPN", "count": 1, "share": 100.0}]
     assert data["severity"]["week"] == {"high": 1, "medium": 1, "low": 0, "unknown": 1}
@@ -69,13 +69,13 @@ def test_daily_series_covers_seven_days_ending_at_latest_activity():
     assert [item["count"] for item in data["daily"]] == [0, 0, 0, 0, 0, 1, 1]
 
 
-def test_cancel_week_counts_categories_with_cancellation_in_name():
+def test_billing_week_counts_billing_category():
     data = build_dashboard_data(_week_rows(), _day_rows(), CATEGORIES, [
-        _classification("w1", "Подписка и отмена", "Хочет отменить", None),
+        _classification("w1", "Оплата и управление подпиской", "Отмена подписки", None),
         _classification("w2", "Оплата", "Карта отклонена", None),
-        _classification("d1", "Подписка и отмена", "Возврат денег", None),
+        _classification("d1", "Оплата и управление подпиской", "Возврат денег", None),
     ], "w", "d")
-    assert data["kpis"]["cancel_week"] == 2
+    assert data["kpis"]["billing_week"] == 2
 
 
 def test_daily_series_empty_when_no_rows():
