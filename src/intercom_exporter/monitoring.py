@@ -1,26 +1,29 @@
 import json
 from calendar import monthrange
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from .dates import DateRange
+from .dates import DateRange, DateTimeRange
 from .support_analysis import prepare_monitoring_analysis
 
 
-def _subtract_months(value: date, months: int) -> date:
+def _subtract_months(value: datetime, months: int) -> datetime:
     month_index = value.year * 12 + value.month - 1 - months
     year, month_index = divmod(month_index, 12)
     month = month_index + 1
-    return date(year, month, min(value.day, monthrange(year, month)[1]))
+    day = min(value.day, monthrange(year, month)[1])
+    return value.replace(year=year, month=month, day=day)
 
 
-def build_monitoring_windows(today: date | None = None) -> dict[str, DateRange]:
-    current_day = today or datetime.now(timezone.utc).date()
+def build_monitoring_windows(now: datetime | None = None) -> dict[str, DateTimeRange]:
+    """Скользящие окна от момента запуска (UTC): 3 месяца, 7×24 часа, 24 часа."""
+    current = now or datetime.now(timezone.utc)
+    current = current.astimezone(timezone.utc) if current.tzinfo else current.replace(tzinfo=timezone.utc)
     return {
-        "backup_3_months": DateRange(_subtract_months(current_day, 3), current_day),
-        "last_week": DateRange(current_day - timedelta(days=7), current_day),
-        "last_day": DateRange(current_day - timedelta(days=1), current_day),
+        "backup_3_months": DateTimeRange(_subtract_months(current, 3), current),
+        "last_week": DateTimeRange(current - timedelta(days=7), current),
+        "last_day": DateTimeRange(current - timedelta(days=1), current),
     }
 
 

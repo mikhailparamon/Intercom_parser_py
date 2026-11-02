@@ -1,28 +1,31 @@
 import json
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import pytest
 
-from intercom_exporter.dates import DateRange
+from intercom_exporter.dates import DateRange, DateTimeRange
 from intercom_exporter.monitoring import build_monitoring_windows, create_monitoring_snapshots, record_has_activity_in_range
 
 
+def test_monitoring_windows_roll_from_exact_launch_moment():
+    now = datetime(2026, 11, 2, 8, 0, 0, tzinfo=timezone.utc)
+    windows = build_monitoring_windows(now)
+    assert windows["last_day"] == DateTimeRange(datetime(2026, 11, 1, 8, tzinfo=timezone.utc), now)
+    assert windows["last_week"] == DateTimeRange(datetime(2026, 10, 26, 8, tzinfo=timezone.utc), now)
+    assert windows["backup_3_months"] == DateTimeRange(datetime(2026, 8, 2, 8, tzinfo=timezone.utc), now)
+
+
 @pytest.mark.parametrize(
-    ("today", "expected_start"),
+    ("now", "expected_start"),
     [
-        (date(2026, 10, 31), date(2026, 7, 31)),
-        (date(2026, 5, 31), date(2026, 2, 28)),
-        (date(2024, 5, 31), date(2024, 2, 29)),
-        (date(2026, 3, 31), date(2025, 12, 31)),
+        (datetime(2026, 5, 31, 12, tzinfo=timezone.utc), datetime(2026, 2, 28, 12, tzinfo=timezone.utc)),
+        (datetime(2024, 5, 31, 12, tzinfo=timezone.utc), datetime(2024, 2, 29, 12, tzinfo=timezone.utc)),
+        (datetime(2026, 3, 31, 12, tzinfo=timezone.utc), datetime(2025, 12, 31, 12, tzinfo=timezone.utc)),
     ],
 )
-def test_monitoring_windows_use_three_months_and_completed_days(today, expected_start):
-    windows = build_monitoring_windows(today)
-
-    assert windows["backup_3_months"] == DateRange(expected_start, today)
-    assert windows["last_week"] == DateRange(date.fromordinal(today.toordinal() - 7), today)
-    assert windows["last_day"] == DateRange(date.fromordinal(today.toordinal() - 1), today)
+def test_monitoring_archive_clamps_day_when_target_month_is_short(now, expected_start):
+    assert build_monitoring_windows(now)["backup_3_months"].start == expected_start
 
 
 def test_activity_window_includes_created_updated_and_part_timestamps():
@@ -48,7 +51,7 @@ def test_create_monitoring_snapshots_preserves_archive_and_writes_window_files(t
     (export_dir / "manifest.json").write_text(json.dumps({"start": "2026-07-31", "end_exclusive": "2026-10-31", "status": "success", "error_count": 0}), encoding="utf-8")
     result = create_monitoring_snapshots(
         {"output_dir": str(export_dir), "status": "success", "error_count": 0},
-        build_monitoring_windows(date(2026, 10, 31)),
+        build_monitoring_windows(datetime(2026, 10, 31, tzinfo=timezone.utc)),
     )
 
     backup = json.loads((export_dir / "backup_3_months" / "conversations.json").read_text(encoding="utf-8"))
@@ -75,7 +78,7 @@ def test_empty_window_skips_chatgpt_preparation_and_inherits_partial_status(tmp_
     (export_dir / "manifest.json").write_text(json.dumps({"limitations": ["one failed"]}), encoding="utf-8")
     result = create_monitoring_snapshots(
         {"output_dir": str(export_dir), "status": "partial", "error_count": 1},
-        build_monitoring_windows(date(2026, 10, 31)),
+        build_monitoring_windows(datetime(2026, 10, 31, tzinfo=timezone.utc)),
     )
 
     assert result["last_week"]["conversation_count"] == 0
@@ -89,7 +92,7 @@ def test_empty_window_skips_chatgpt_preparation_and_inherits_partial_status(tmp_
 def test_run_monitoring_uses_one_full_fields_export_with_api_version(tmp_path):
     from intercom_exporter.monitoring import run_monitoring
 
-    windows = build_monitoring_windows(date(2026, 10, 31))
+    windows = build_monitoring_windows(datetime(2026, 10, 31, tzinfo=timezone.utc))
     calls = []
 
     class FakeExporter:
@@ -115,7 +118,7 @@ def test_run_monitoring_prepares_one_shared_analysis_from_both_windows(tmp_path)
     from intercom_exporter.monitoring import run_monitoring
     from intercom_exporter.support_analysis import prepare_monitoring_analysis
 
-    windows = build_monitoring_windows(date(2026, 10, 31))
+    windows = build_monitoring_windows(datetime(2026, 10, 31, tzinfo=timezone.utc))
     calls = []
 
     class FakeExporter:
