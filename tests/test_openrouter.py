@@ -71,6 +71,45 @@ def test_load_openrouter_settings_is_optional_and_has_default_model(tmp_path, mo
     assert settings.model == "anthropic/claude-sonnet-4.5"
 
 
+def test_load_dahl_settings_is_optional_and_has_default_model(tmp_path, monkeypatch):
+    from intercom_exporter.config import DEFAULT_DAHL_MODEL, load_dahl_settings
+
+    monkeypatch.delenv("DAHL_API_KEY", raising=False)
+    monkeypatch.delenv("DAHL_MODEL", raising=False)
+    monkeypatch.delenv("DAHL_WORKERS", raising=False)
+    assert load_dahl_settings(tmp_path / ".env") is None
+
+    env_file = tmp_path / ".env"
+    env_file.write_text("DAHL_API_KEY=test-key\n", encoding="utf-8")
+    settings = load_dahl_settings(env_file)
+    assert settings is not None
+    assert settings.api_key == "test-key"
+    assert settings.model == DEFAULT_DAHL_MODEL == "MiniMaxAI/MiniMax-M2.7"
+    assert settings.workers == 3
+
+
+def test_load_config_exposes_dahl_settings(tmp_path, monkeypatch):
+    from intercom_exporter.config import load_config
+
+    monkeypatch.delenv("DAHL_API_KEY", raising=False)
+    monkeypatch.delenv("DAHL_MODEL", raising=False)
+    monkeypatch.delenv("DAHL_WORKERS", raising=False)
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "INTERCOM_ACCESS_TOKEN=token\nDAHL_API_KEY=dahl-key\nDAHL_MODEL=vendor/model\nDAHL_WORKERS=5\n",
+        encoding="utf-8",
+    )
+    config = load_config(env_file)
+    assert config.dahl_api_key == "dahl-key"
+    assert config.dahl_model == "vendor/model"
+    assert config.dahl_workers == 5
+
+    env_file.write_text("INTERCOM_ACCESS_TOKEN=token\n", encoding="utf-8")
+    monkeypatch.delenv("DAHL_API_KEY", raising=False)
+    config = load_config(env_file)
+    assert config.dahl_api_key is None
+
+
 def test_split_batches_obeys_utf8_byte_limit_and_keeps_each_conversation_once():
     from intercom_exporter.openrouter import _split_batches
 
