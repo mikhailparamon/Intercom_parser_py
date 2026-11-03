@@ -124,6 +124,7 @@ def build_dashboard_data(
         for item in week_classifications
         if item["severity"] == "high"
     ]
+    high_cases_all.sort(key=lambda case: str(case["id"]) not in day_ids)
     high_cases = high_cases_all[:10]
     top = week_categories[0] if week_categories else {"name": "—", "count": 0, "share": 0.0}
     billing_week = sum(

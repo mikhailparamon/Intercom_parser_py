@@ -236,3 +236,19 @@ def test_daily_series_counts_last_meaningful_activity_day_not_updated_at():
     assert series["2026-10-30"] == 1  # обращение «а» — по дню реального сообщения
     assert series["2026-11-01"] == 1  # обращение «c» — по созданию
     assert series["2026-11-02"] == 1  # обращение «b» — не 3 (updated_at не используется)
+
+
+def test_high_cases_list_day_window_first():
+    week_rows = [
+        {"id": "w_old", "created_at": "2026-10-26T09:00:00Z", "updated_at": "2026-10-26T10:00:00Z"},
+        {"id": "d_new", "created_at": "2026-11-02T09:00:00Z", "updated_at": "2026-11-02T10:00:00Z"},
+    ]
+    day_rows = [week_rows[1]]
+    classifications = [
+        _classification("w_old", "Подключение VPN", "Не подключается", "high"),
+        _classification("d_new", "Подключение VPN", "Не подключается", "high"),
+    ]
+
+    data = build_dashboard_data(week_rows, day_rows, CATEGORIES, classifications, "w", "d")
+
+    assert [case["id"] for case in data["high_cases"]] == ["d_new", "w_old"]
