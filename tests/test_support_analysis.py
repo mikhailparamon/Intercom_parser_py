@@ -1,11 +1,13 @@
 import csv
 import json
+import os
 
 import pytest
 
 from intercom_exporter.support_analysis import (
     AnalysisError,
     _build_payload,
+    find_latest_run,
     generate_report,
     main,
     prepare_analysis,
@@ -521,3 +523,33 @@ def test_cli_prepare_monitoring_and_report_monitoring_use_one_shared_output(tmp_
     assert (output_dir / "report.md").is_file()
     assert (output_dir / "classifications.csv").is_file()
     assert "Единый отчёт сохранён" in capsys.readouterr().out
+
+
+def _make_run(root, name):
+    run = root / name
+    (run / "last_week").mkdir(parents=True)
+    (run / "last_day").mkdir(parents=True)
+    (run / "last_week" / "conversations.json").write_text("[]", encoding="utf-8")
+    (run / "last_day" / "conversations.json").write_text("[]", encoding="utf-8")
+    return run
+
+
+def test_find_latest_run_returns_most_recent(tmp_path):
+    old = _make_run(tmp_path, "run_old")
+    new = _make_run(tmp_path, "run_new")
+    os.utime(old / "last_day" / "conversations.json", (1000000000, 1000000000))
+    os.utime(new / "last_day" / "conversations.json", (1000000100, 1000000100))
+
+    assert find_latest_run(tmp_path) == new
+
+
+def test_find_latest_run_ignores_dirs_without_slices(tmp_path):
+    run = _make_run(tmp_path, "run_ok")
+    (tmp_path / "not_a_run").mkdir()
+
+    assert find_latest_run(tmp_path) == run
+
+
+def test_find_latest_run_errors_when_no_runs(tmp_path):
+    with pytest.raises(AnalysisError, match="нет прогонов"):
+        find_latest_run(tmp_path)

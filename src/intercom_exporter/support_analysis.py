@@ -316,6 +316,30 @@ def _default_monitoring_output(week_path: Path, day_path: Path) -> Path:
     return week_path.parent / "support-analysis"
 
 
+def find_latest_run(data_root: str | Path = "data") -> Path:
+    """Каталог последнего прогона мониторинга: содержит срезы last_week и last_day."""
+    root = Path(data_root)
+    if not root.is_dir():
+        raise AnalysisError(f"Каталог данных не найден: {root}")
+    candidates = [
+        path for path in root.iterdir()
+        if path.is_dir()
+        and (path / "last_week" / "conversations.json").is_file()
+        and (path / "last_day" / "conversations.json").is_file()
+    ]
+    if not candidates:
+        raise AnalysisError(f"В {root} нет прогонов со срезами last_week/last_day")
+
+    def stamp(path: Path) -> float:
+        marker = path / "last_day" / "manifest.json"
+        try:
+            return marker.stat().st_mtime
+        except OSError:
+            return path.stat().st_mtime
+
+    return max(candidates, key=stamp)
+
+
 def prepare_monitoring_analysis(
     week_input_path: str | Path,
     day_input_path: str | Path,
