@@ -301,3 +301,40 @@ def test_merge_agents_results_accepts_recommendations_list(tmp_path):
 
     result = json.loads(Path(outcome["result_path"]).read_text(encoding="utf-8"))
     assert result["recommendations"] == ["Общий совет"]
+
+
+def test_cli_merge_agents_defaults_to_latest_run(tmp_path, monkeypatch, capsys):
+    from intercom_exporter.support_analysis import main
+
+    run = tmp_path / "data" / "20261102T222417Z_20261103T222417Z"
+    week = _write_conversations(run / "last_week", ["a"])
+    day = _write_conversations(run / "last_day", ["a"])
+    out = run / "support-analysis"
+    manifest = prepare_agents_bundle(week, day, out, workers=2)
+    _fill_results(manifest, category=None)
+    monkeypatch.chdir(tmp_path)
+
+    code = main(["merge-agents"])
+
+    assert code == 0
+    assert "Дашборд" in capsys.readouterr().out
+    assert (out / "dashboard.html").is_file()
+
+
+def test_cli_merge_agents_picks_up_agents_work_recommendations(tmp_path, monkeypatch):
+    from intercom_exporter.support_analysis import main
+
+    run = tmp_path / "data" / "run1"
+    week = _write_conversations(run / "last_week", ["a"])
+    day = _write_conversations(run / "last_day", ["a"])
+    out = run / "support-analysis"
+    manifest = prepare_agents_bundle(week, day, out, workers=2)
+    _fill_results(manifest, category=None)
+    rec_path = out / "agents_work" / "recommendations.json"
+    rec_path.write_text(json.dumps(["Общий совет из бандла"], ensure_ascii=False), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    assert main(["merge-agents"]) == 0
+
+    result = json.loads((out / "chatgpt_result.json").read_text(encoding="utf-8"))
+    assert result["recommendations"] == ["Общий совет из бандла"]

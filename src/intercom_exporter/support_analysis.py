@@ -340,6 +340,19 @@ def find_latest_run(data_root: str | Path = "data") -> Path:
     return max(candidates, key=stamp)
 
 
+def _resolve_run_paths(args: argparse.Namespace) -> tuple[Path, Path]:
+    """Разрешает пары срезов: явные --week/--day, --run либо последний прогон в data/."""
+    provided = [args.week is not None, args.day is not None]
+    if any(provided) and not all(provided):
+        raise AnalysisError("Указывайте --week и --day вместе, либо используйте --run/последний прогон")
+    if all(provided):
+        if args.run:
+            raise AnalysisError("--run нельзя сочетать с --week/--day")
+        return Path(args.week), Path(args.day)
+    run = Path(args.run) if args.run else find_latest_run()
+    return run / "last_week" / "conversations.json", run / "last_day" / "conversations.json"
+
+
 def prepare_monitoring_analysis(
     week_input_path: str | Path,
     day_input_path: str | Path,
@@ -709,8 +722,9 @@ def build_parser() -> argparse.ArgumentParser:
     monitor_report.add_argument("--output", help="Общий каталог для report.md и classifications.csv")
     monitor_report.add_argument("--dashboard-dir", help="Каталог для dashboard.html (по умолчанию: общий каталог отчёта)")
     merge = subparsers.add_parser("merge-agents", help="Слить результаты субагентов, проверить и построить отчёт с дашбордом")
-    merge.add_argument("--week", required=True, help="Исходный conversations.json недельного окна")
-    merge.add_argument("--day", required=True, help="Исходный conversations.json дневного окна")
+    merge.add_argument("--week", help="Исходный conversations.json недельного окна (по умолчанию: последний прогон)")
+    merge.add_argument("--day", help="Исходный conversations.json дневного окна (по умолчанию: последний прогон)")
+    merge.add_argument("--run", help="Каталог прогона в data/ (по умолчанию: последний); альтернатива --week/--day")
     merge.add_argument("--output", help="Каталог анализа (по умолчанию: support-analysis рядом с данными)")
     merge.add_argument("--compare-with", help="Прошлый chatgpt_result.json для отчёта сравнения")
     merge.add_argument("--recommendations", help="JSON-файл со списком общих рекомендаций для отчёта и дашборда")
@@ -795,10 +809,15 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "merge-agents":
             from .agents_orchestration import merge_agents_results
 
-            week_path, day_path = Path(args.week), Path(args.day)
+            week_path, day_path = _resolve_run_paths(args)
             output = Path(args.output) if args.output else _default_monitoring_output(week_path, day_path)
+            recommendations = args.recommendations
+            if recommendations is None:
+                default_rec = output / "agents_work" / "recommendations.json"
+                if default_rec.is_file():
+                    recommendations = str(default_rec)
             result = merge_agents_results(week_path, day_path, output, compare_with=args.compare_with,
-                                          recommendations=args.recommendations)
+                                          recommendations=recommendations)
             print(
                 f"Слито классификаций: {result['unique_conversation_count']}. Результат: {result['result_path']}. "
                 f"Отчёт: {result['report_path']}. Дашборд: {result['dashboard_path']}"
