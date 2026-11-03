@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from .activity import MEANINGFUL_PART_TYPES
 from .agents_orchestration import BILLING_CATEGORY
 from .support_analysis import _write_text
 
@@ -32,11 +33,30 @@ def _iso_date(value: Any) -> date | None:
             return None
 
 
+def _conversation_activity_day(row: dict[str, Any]) -> date | None:
+    """День последней осмысленной активности обращения (fallback — день создания).
+
+    Поле updated_at не используется: его вздувают системные события
+    (bulk_reassignment и т.п.), что искажало дневной график.
+    """
+    day = _iso_date(row.get("created_at"))
+    parts = row.get("conversation_parts") or []
+    if isinstance(parts, dict):
+        parts = parts.get("conversation_parts") or []
+    if isinstance(parts, list):
+        for part in parts:
+            if isinstance(part, dict) and part.get("part_type") in MEANINGFUL_PART_TYPES:
+                part_day = _iso_date(part.get("created_at"))
+                if part_day and (day is None or part_day > day):
+                    day = part_day
+    return day
+
+
 def _daily_series(week_rows: list[dict]) -> list[dict]:
-    """Счётчики по дням за 7 календарных дней, заканчивая датой последней активности (updated_at, fallback created_at)."""
+    """Счётчики по дням за 7 календарных дней, заканчивая днём последней осмысленной активности."""
     dates = []
     for row in week_rows:
-        day = _iso_date(row.get("updated_at")) or _iso_date(row.get("created_at"))
+        day = _conversation_activity_day(row)
         if day:
             dates.append(day)
     if not dates:

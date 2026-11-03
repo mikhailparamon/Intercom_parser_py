@@ -62,11 +62,19 @@ def test_build_dashboard_data_counts_windows_categories_and_severity():
 
 
 def test_daily_series_covers_seven_days_ending_at_latest_activity():
-    data = build_dashboard_data(_week_rows(), _day_rows(), CATEGORIES, _classifications(), "w", "d")
+    rows = [
+        {"id": "w1", "created_at": "2026-10-26T09:00:00Z", "updated_at": "2026-10-26T10:00:00Z",
+         "conversation_parts": {"conversation_parts": [{"part_type": "comment", "created_at": "2026-11-01T12:00:00Z"}]}},
+        {"id": "w2", "created_at": "2026-10-27T00:00:00Z", "updated_at": "2026-11-01T12:00:00Z",
+         "conversation_parts": {"conversation_parts": [{"part_type": "comment", "created_at": "2026-11-01T13:00:00Z"}]}},
+        {"id": "d1", "created_at": "2026-10-28T00:00:00Z", "updated_at": "2026-11-02T08:00:00Z",
+         "conversation_parts": {"conversation_parts": [{"part_type": "open", "created_at": "2026-11-02T08:00:00Z"}]}},
+    ]
+    data = build_dashboard_data(rows, rows, CATEGORIES, _classifications(), "w", "d")
     assert [item["date"] for item in data["daily"]] == [
         "2026-10-27", "2026-10-28", "2026-10-29", "2026-10-30", "2026-10-31", "2026-11-01", "2026-11-02",
     ]
-    assert [item["count"] for item in data["daily"]] == [0, 0, 0, 0, 0, 1, 1]
+    assert [item["count"] for item in data["daily"]] == [0, 0, 0, 0, 0, 2, 1]
 
 
 def test_billing_week_counts_billing_category():
@@ -202,3 +210,29 @@ def test_high_cases_capped_at_top_ten_with_total():
     assert len(data["high_cases"]) == 10
     assert data["high_cases_total"] == 12
     assert [case["id"] for case in data["high_cases"]] == [f"h{i}" for i in range(10)]
+
+
+def test_daily_series_counts_last_meaningful_activity_day_not_updated_at():
+    def row(cid, created, updated, parts):
+        return {"id": cid, "created_at": created, "updated_at": updated,
+                "conversation_parts": {"conversation_parts": parts}}
+
+    rows = [
+        # старое обращение, реальное сообщение 30 октября, но updated_at = bulk_reassignment 2 ноября
+        row("a", "2026-07-08T10:00:00Z", "2026-11-02T15:00:00Z",
+            [{"part_type": "comment", "created_at": "2026-10-30T12:00:00Z"},
+             {"part_type": "bulk_reassignment", "created_at": "2026-11-02T15:00:00Z"}]),
+        # сообщение 2 ноября
+        row("b", "2026-11-02T09:00:00Z", "2026-11-02T10:00:00Z",
+            [{"part_type": "open", "created_at": "2026-11-02T09:00:00Z"}]),
+        # только системное событие в окне — считается по созданию
+        row("c", "2026-11-01T09:00:00Z", "2026-11-02T15:00:00Z",
+            [{"part_type": "bulk_reassignment", "created_at": "2026-11-02T15:00:00Z"}]),
+    ]
+
+    data = build_dashboard_data(rows, rows, CATEGORIES, [], "w", "d")
+    series = {item["date"]: item["count"] for item in data["daily"]}
+
+    assert series["2026-10-30"] == 1  # обращение «а» — по дню реального сообщения
+    assert series["2026-11-01"] == 1  # обращение «c» — по созданию
+    assert series["2026-11-02"] == 1  # обращение «b» — не 3 (updated_at не используется)
