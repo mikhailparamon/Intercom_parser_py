@@ -338,3 +338,22 @@ def test_cli_merge_agents_picks_up_agents_work_recommendations(tmp_path, monkeyp
 
     result = json.loads((out / "chatgpt_result.json").read_text(encoding="utf-8"))
     assert result["recommendations"] == ["Общий совет из бандла"]
+
+
+def test_cli_render_dashboard_from_existing_result(tmp_path, monkeypatch):
+    from intercom_exporter.support_analysis import main
+
+    run = tmp_path / "data" / "run1"
+    week = _write_conversations(run / "last_week", ["a"])
+    day = _write_conversations(run / "last_day", ["a"])
+    out = run / "support-analysis"
+    manifest = prepare_agents_bundle(week, day, out, workers=2)
+    _fill_results(manifest, category=None)
+    monkeypatch.chdir(tmp_path)
+    assert main(["merge-agents"]) == 0
+    (out / "dashboard.html").unlink()
+
+    code = main(["render-dashboard", "--dashboard-dir", str(tmp_path / "dash")])
+
+    assert code == 0
+    assert (tmp_path / "dash" / "dashboard.html").is_file()

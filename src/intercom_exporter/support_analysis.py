@@ -608,6 +608,41 @@ def _validate_period_analysis(result: dict, week_payload: dict, day_payload: dic
     return validated
 
 
+def render_dashboard(
+    week_input_path: str | Path,
+    day_input_path: str | Path,
+    result_path: str | Path,
+    output_dir: str | Path | None = None,
+    dashboard_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    """Строит dashboard.html из готового chatgpt_result.json без слияния и отчёта."""
+    week_path, day_path = Path(week_input_path), Path(day_input_path)
+    week_rows = _read_conversations(week_path, allow_empty=True)
+    day_rows = _read_conversations(day_path, allow_empty=True)
+    union_rows = _union_conversations(week_rows, day_rows)
+    if not union_rows:
+        raise AnalysisError("Недельный и дневной срезы не содержат обращений")
+    result = _load_result(result_path)
+    categories, classifications = _validate_result(union_rows, _build_payload(union_rows), result)
+    period_analysis = _validate_period_analysis(result, _build_payload(week_rows), _build_payload(day_rows))
+    # Ленивый импорт: dashboard импортирует _write_text из этого модуля — импорт наверху дал бы цикл.
+    from .dashboard import build_dashboard_data, write_dashboard
+
+    data = build_dashboard_data(
+        week_rows, day_rows, categories, classifications,
+        _period_label(week_path) or "Последние 7 дней",
+        _period_label(day_path) or "Последний день",
+        {
+            "overall": result["recommendations"],
+            "week": period_analysis["week"]["recommendations"],
+            "day": period_analysis["day"]["recommendations"],
+        },
+    )
+    output = Path(output_dir) if output_dir else _default_monitoring_output(week_path, day_path)
+    dashboard_path = write_dashboard(data, Path(dashboard_dir) if dashboard_dir else output)
+    return {"dashboard_path": str(dashboard_path)}
+
+
 def generate_monitoring_report(
     week_input_path: str | Path,
     day_input_path: str | Path,
@@ -728,6 +763,13 @@ def build_parser() -> argparse.ArgumentParser:
     merge.add_argument("--output", help="Каталог анализа (по умолчанию: support-analysis рядом с данными)")
     merge.add_argument("--compare-with", help="Прошлый chatgpt_result.json для отчёта сравнения")
     merge.add_argument("--recommendations", help="JSON-файл со списком общих рекомендаций для отчёта и дашборда")
+    dash = subparsers.add_parser("render-dashboard", help="Построить dashboard.html из готового chatgpt_result.json без слияния")
+    dash.add_argument("--week", help="Исходный conversations.json недельного окна (по умолчанию: последний прогон)")
+    dash.add_argument("--day", help="Исходный conversations.json дневного окна (по умолчанию: последний прогон)")
+    dash.add_argument("--run", help="Каталог прогона в data/ (по умолчанию: последний)")
+    dash.add_argument("--result", help="Готовый chatgpt_result.json (по умолчанию: support-analysis рядом с прогоном)")
+    dash.add_argument("--output", help="Каталог результатов отчёта")
+    dash.add_argument("--dashboard-dir", help="Каталог для dashboard.html (по умолчанию: каталог отчёта)")
     return parser
 
 
@@ -824,6 +866,12 @@ def main(argv: list[str] | None = None) -> int:
             )
             if "comparison_path" in result:
                 print(f"Сравнение с предыдущим прогоном: {result['comparison_path']}")
+        elif args.command == "render-dashboard":
+            week_path, day_path = _resolve_run_paths(args)
+            result_path = Path(args.result) if args.result else _default_monitoring_output(week_path, day_path) / "chatgpt_result.json"
+            outcome = render_dashboard(week_path, day_path, result_path,
+                                       output_dir=args.output, dashboard_dir=args.dashboard_dir)
+            print(f"Дашборд: {outcome['dashboard_path']}")
         else:
             result = generate_monitoring_report(args.week, args.day, args.result, args.output, args.dashboard_dir)
             print(
