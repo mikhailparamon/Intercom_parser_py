@@ -96,6 +96,29 @@ def load_agent_workers(env_file: str | Path | None = None) -> int:
 
 
 @dataclass(frozen=True)
+class SlackSettings:
+    bot_token: str
+    channel_id: str = ""
+
+
+def load_slack_settings(env_file: str | Path | None = None) -> SlackSettings | None:
+    """Настройки Slack: .env SLACK_BOT_TOKEN (+ SLACK_CHANNEL_ID).
+
+    Без load_dotenv, как load_agent_workers: переменные читаются из os.environ
+    или парсятся из файла напрямую, чтобы не загрязнять os.environ для тестов.
+    """
+    if env_file is not None:
+        token = _read_env_value(Path(env_file), "SLACK_BOT_TOKEN")
+        channel = _read_env_value(Path(env_file), "SLACK_CHANNEL_ID")
+    else:
+        token = os.getenv("SLACK_BOT_TOKEN", "").strip() or _read_env_value(Path(".env"), "SLACK_BOT_TOKEN")
+        channel = os.getenv("SLACK_CHANNEL_ID", "").strip() or _read_env_value(Path(".env"), "SLACK_CHANNEL_ID")
+    if not token:
+        return None
+    return SlackSettings(token, channel)
+
+
+@dataclass(frozen=True)
 class Config:
     access_token: str
     api_version: str

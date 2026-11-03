@@ -779,7 +779,39 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Число чанков субагентов, если бандл ещё не создан (2–20; по умолчанию: AGENT_WORKERS из .env или 10)")
     research.add_argument("--compare-with", help="Прошлый chatgpt_result.json для отчёта сравнения")
     research.add_argument("--dashboard-dir", help="Каталог для dashboard.html")
+    for cmd in (merge, research):
+        cmd.add_argument("--no-notify", action="store_true",
+                         help="Не отправлять дашборд в Slack после построения (по умолчанию отправляется, если заданы SLACK_BOT_TOKEN и SLACK_CHANNEL_ID)")
+    notify = subparsers.add_parser("notify-slack", help="Отправить dashboard.html и сводку отчёта в Slack-канал")
+    notify.add_argument("--run", help="Каталог прогона в data/ (по умолчанию: последний)")
+    notify.add_argument("--channel", help="ID канала Slack (по умолчанию: SLACK_CHANNEL_ID из .env)")
     return parser
+
+
+def _maybe_notify_slack(args: argparse.Namespace, result: dict) -> None:
+    """Автоотправка дашборда в Slack после merge-agents/research.
+
+    Срабатывает, только если заданы SLACK_BOT_TOKEN и SLACK_CHANNEL_ID в .env
+    и не передан --no-notify. Ошибка отправки не проваливает саму команду.
+    """
+    if getattr(args, "no_notify", False):
+        return
+    from . import config
+
+    settings = config.load_slack_settings()
+    if settings is None or not settings.channel_id:
+        return
+    import requests
+
+    from .notify_slack import SlackNotifyError, send_dashboard
+
+    try:
+        file_id = send_dashboard(settings.bot_token, settings.channel_id,
+                                 result["dashboard_path"], result["report_path"])
+    except (SlackNotifyError, OSError, requests.RequestException) as exc:
+        print(f"Slack-уведомление не отправлено: {exc}")
+        return
+    print(f"Дашборд отправлен в Slack (канал {settings.channel_id}), file_id: {file_id}")
 
 
 def _analysis_kwargs(args, parser) -> dict[str, Any] | None:
@@ -876,6 +908,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             if "comparison_path" in result:
                 print(f"Сравнение с предыдущим прогоном: {result['comparison_path']}")
+            _maybe_notify_slack(args, result)
         elif args.command == "render-dashboard":
             week_path, day_path = _resolve_run_paths(args)
             result_path = Path(args.result) if args.result else _default_monitoring_output(week_path, day_path) / "chatgpt_result.json"
@@ -918,6 +951,20 @@ def main(argv: list[str] | None = None) -> int:
             )
             if "comparison_path" in result:
                 print(f"Сравнение с предыдущим прогоном: {result['comparison_path']}")
+            _maybe_notify_slack(args, result)
+        elif args.command == "notify-slack":
+            from . import config
+            from .notify_slack import send_dashboard
+
+            settings = config.load_slack_settings()
+            channel = args.channel or (settings.channel_id if settings else "")
+            if settings is None or not channel:
+                parser.error("notify-slack: задайте SLACK_BOT_TOKEN и SLACK_CHANNEL_ID в .env (или передайте --channel)")
+            run_dir = Path(args.run) if args.run else find_latest_run()
+            analysis = run_dir / "support-analysis"
+            file_id = send_dashboard(settings.bot_token, channel,
+                                     analysis / "dashboard.html", analysis / "report.md")
+            print(f"Дашборд отправлен в Slack (канал {channel}), file_id: {file_id}")
         else:
             result = generate_monitoring_report(args.week, args.day, args.result, args.output, args.dashboard_dir)
             print(
