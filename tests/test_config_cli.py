@@ -432,3 +432,26 @@ def test_cli_skip_analysis_beats_analyze_flag(tmp_path, monkeypatch, capsys):
 
     assert cli.main(["--skip-analysis", "--analyze", "dahl"]) == 0
     assert calls[0]["prepare"] is None
+
+
+def test_agent_workers_defaults_and_env(monkeypatch, tmp_path):
+    from intercom_exporter.config import load_agent_workers
+
+    env_file = tmp_path / ".env"
+
+    monkeypatch.delenv("AGENT_WORKERS", raising=False)
+    assert load_agent_workers(env_file) == 10
+
+    env_file.write_text("AGENT_WORKERS=5\n", encoding="utf-8")
+    monkeypatch.delenv("AGENT_WORKERS", raising=False)
+    assert load_agent_workers(env_file) == 5
+
+    env_file.write_text("AGENT_WORKERS=1\n", encoding="utf-8")
+    monkeypatch.delenv("AGENT_WORKERS", raising=False)
+    with pytest.raises(ValueError, match="AGENT_WORKERS"):
+        load_agent_workers(env_file)
+
+    env_file.write_text("AGENT_WORKERS=abc\n", encoding="utf-8")
+    monkeypatch.delenv("AGENT_WORKERS", raising=False)
+    with pytest.raises(ValueError, match="AGENT_WORKERS"):
+        load_agent_workers(env_file)

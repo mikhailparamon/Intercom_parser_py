@@ -9,6 +9,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from .config import load_agent_workers
+
 
 class AnalysisError(ValueError):
     pass
@@ -746,8 +748,8 @@ def build_parser() -> argparse.ArgumentParser:
     monitor_prepare.add_argument("--output", help="Общий каталог с двумя входными файлами и PROMPT.md")
     monitor_prepare.add_argument("--analyze", choices=("openrouter", "dahl"),
                                  help="Автоматический AI-анализ через выбранный провайдер (без флага — только подготовка файлов для ручного анализа)")
-    monitor_prepare.add_argument("--workers", type=int, default=10,
-                                 help="Число параллельных субагентов для пакета оркестрации (2–20, по умолчанию 10)")
+    monitor_prepare.add_argument("--workers", type=int,
+                                 help="Число параллельных субагентов для пакета оркестрации (2–20; по умолчанию: AGENT_WORKERS из .env или 10)")
     monitor_prepare.add_argument("--no-agents", action="store_true",
                                  help="Не создавать пакет оркестрации субагентов (только PROMPT.md и входные JSON)")
     monitor_report = subparsers.add_parser("report-monitoring", help="Проверить общий результат и построить единый отчёт по двум окнам")
@@ -773,8 +775,8 @@ def build_parser() -> argparse.ArgumentParser:
     dash.add_argument("--dashboard-dir", help="Каталог для dashboard.html (по умолчанию: каталог отчёта)")
     research = subparsers.add_parser("research", help="Единый прогон: бандл → ожидание оркестрации → merge → дашборд")
     research.add_argument("--run", help="Каталог прогона в data/ (по умолчанию: последний)")
-    research.add_argument("--workers", type=int, default=10,
-                          help="Число чанков субагентов, если бандл ещё не создан (2–20)")
+    research.add_argument("--workers", type=int,
+                          help="Число чанков субагентов, если бандл ещё не создан (2–20; по умолчанию: AGENT_WORKERS из .env или 10)")
     research.add_argument("--compare-with", help="Прошлый chatgpt_result.json для отчёта сравнения")
     research.add_argument("--dashboard-dir", help="Каталог для dashboard.html")
     return parser
@@ -837,7 +839,8 @@ def main(argv: list[str] | None = None) -> int:
             if not args.no_agents and not args.analyze:
                 from .agents_orchestration import prepare_agents_bundle
 
-                bundle = prepare_agents_bundle(args.week, args.day, result["output_dir"], workers=args.workers)
+                bundle = prepare_agents_bundle(args.week, args.day, result["output_dir"],
+                                               workers=args.workers if args.workers is not None else load_agent_workers())
                 print(
                     f"Пакет оркестрации субагентов готов: {bundle['workers']} чанков, "
                     f"таксономия: {bundle['taxonomy_source']}. Манифест: {bundle['work_dir']}/manifest.json. "
@@ -887,7 +890,8 @@ def main(argv: list[str] | None = None) -> int:
             day_path = run_dir / "last_day" / "conversations.json"
             output = run_dir / "support-analysis"
             if not (output / "agents_work" / "manifest.json").is_file():
-                bundle = prepare_agents_bundle(week_path, day_path, output, workers=args.workers)
+                bundle = prepare_agents_bundle(week_path, day_path, output,
+                                               workers=args.workers if args.workers is not None else load_agent_workers())
                 print(
                     f"Пакет оркестрации субагентов готов: {bundle['workers']} чанков. "
                     f"Манифест: {bundle['work_dir']}/manifest.json"

@@ -78,3 +78,8 @@ python -m pytest tests/test_config_cli.py -k имя_теста
 - `.kimi/skills/` — скиллы Superpowers и Caveman для этого проекта.
 - `.mcp.json` — MCP-сервер context7 (актуальная документация библиотек).
 - Эти файлы локальные, в репозиторий не попадают.
+
+## Оркестрация субагентов
+
+- Число субагентов по умолчанию: переменная `AGENT_WORKERS` в `.env` (2–20; без неё — 10), переопределяется флагами `--agent-workers` (main.py) и `--workers` (prepare-monitoring, research).
+- Если среда не умеет порождать субагентов, классифицируйте чанки по одному: прочитайте `agents_work/chunk_XX.json`, классифицируйте по `PROMPT.md`, запишите `agents_work/result_XX.json` (формат — `agents_work/agents_protocol.md`), забудьте контекст чанка и переходите к следующему; затем `merge-agents`. Не держите в контексте больше одного чанка.

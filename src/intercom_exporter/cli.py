@@ -9,6 +9,7 @@ from .config import (
     DEFAULT_DAHL_WORKERS,
     DEFAULT_OPENROUTER_MODEL,
     DEFAULT_OPENROUTER_WORKERS,
+    load_agent_workers,
     load_config,
 )
 from .dates import default_range, parse_date_range
@@ -60,8 +61,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Автоматический AI-анализ после экспорта через выбранный провайдер (без флага — только подготовка файлов для ручного анализа)")
     parser.add_argument("--no-agents", action="store_true",
                         help="Мониторинг: не создавать пакет оркестрации субагентов после выгрузки")
-    parser.add_argument("--agent-workers", type=int, default=10,
-                        help="Число чанков субагентов в пакете оркестрации (2–20, по умолчанию 10)")
+    parser.add_argument("--agent-workers", type=int,
+                        help="Число чанков субагентов в пакете оркестрации (2–20; по умолчанию: AGENT_WORKERS из .env или 10)")
     parser.add_argument("--verbose", action="store_true", help="Подробное логирование без содержимого переписок")
     return parser
 
@@ -140,7 +141,8 @@ def main(argv: list[str] | None = None) -> int:
                 exporter, args.output, full_archive=args.full_archive, windows=windows, api_version=config.api_version,
                 timezone_name=args.timezone,
                 prepare=None if args.skip_analysis else prepare_monitoring_analysis,
-                agents=not args.no_agents, agent_workers=args.agent_workers,
+                agents=not args.no_agents,
+                agent_workers=args.agent_workers if args.agent_workers is not None else load_agent_workers(),
             )
         except (IntercomAPIError, AnalysisError, ValueError) as exc:
             logging.error("Мониторинг не выполнен: %s", exc)

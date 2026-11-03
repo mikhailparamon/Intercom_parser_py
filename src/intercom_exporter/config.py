@@ -56,6 +56,45 @@ def load_dahl_settings(env_file: str | Path | None = None) -> DahlSettings | Non
     return DahlSettings(api_key, model, workers)
 
 
+DEFAULT_AGENT_WORKERS = 10
+
+
+def _read_env_value(path: Path, key: str) -> str:
+    """Простой парсер .env без побочного эффекта load_dotenv (загрязнение os.environ)."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ""
+    for line in lines:
+        name, sep, value = line.partition("=")
+        if sep and name.strip() == key:
+            return value.strip().strip('"').strip("'")
+    return ""
+
+
+def load_agent_workers(env_file: str | Path | None = None) -> int:
+    """Число субагентов оркестрации по умолчанию: .env AGENT_WORKERS (2–20), иначе 10.
+
+    Без load_dotenv: переменная читается из os.environ или парсится из файла напрямую,
+    чтобы не влиять на другие настройки и тесты.
+    """
+    if env_file is not None:
+        raw = _read_env_value(Path(env_file), "AGENT_WORKERS")
+    else:
+        raw = os.getenv("AGENT_WORKERS", "").strip()
+        if not raw:
+            raw = _read_env_value(Path(".env"), "AGENT_WORKERS")
+    if not raw:
+        return DEFAULT_AGENT_WORKERS
+    try:
+        workers = int(raw)
+    except ValueError as exc:
+        raise ValueError("AGENT_WORKERS должен быть целым числом от 2 до 20.") from exc
+    if not 2 <= workers <= 20:
+        raise ValueError("AGENT_WORKERS должен быть целым числом от 2 до 20.")
+    return workers
+
+
 @dataclass(frozen=True)
 class Config:
     access_token: str
