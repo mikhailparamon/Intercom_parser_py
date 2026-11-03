@@ -58,6 +58,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Отключить подготовку файлов и автоматический AI-анализ после экспорта")
     parser.add_argument("--analyze", choices=("openrouter", "dahl"),
                         help="Автоматический AI-анализ после экспорта через выбранный провайдер (без флага — только подготовка файлов для ручного анализа)")
+    parser.add_argument("--no-agents", action="store_true",
+                        help="Мониторинг: не создавать пакет оркестрации субагентов после выгрузки")
+    parser.add_argument("--agent-workers", type=int, default=10,
+                        help="Число чанков субагентов в пакете оркестрации (2–20, по умолчанию 10)")
     parser.add_argument("--verbose", action="store_true", help="Подробное логирование без содержимого переписок")
     return parser
 
@@ -136,6 +140,7 @@ def main(argv: list[str] | None = None) -> int:
                 exporter, args.output, full_archive=args.full_archive, windows=windows, api_version=config.api_version,
                 timezone_name=args.timezone,
                 prepare=None if args.skip_analysis else prepare_monitoring_analysis,
+                agents=not args.no_agents, agent_workers=args.agent_workers,
             )
         except (IntercomAPIError, AnalysisError, ValueError) as exc:
             logging.error("Мониторинг не выполнен: %s", exc)
@@ -155,6 +160,12 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{label}: {snapshot['conversation_count']} обращений. Каталог: {snapshot['output_dir']}")
         if result["analysis"]:
             print(f"Общие файлы для анализа обоих периодов: {result['analysis']['output_dir']}")
+            if result["analysis"].get("agents_bundle"):
+                bundle = result["analysis"]["agents_bundle"]
+                print(
+                    f"Пакет оркестрации субагентов готов: {bundle['workers']} чанков, "
+                    f"таксономия: {bundle['taxonomy_source']}. Манифест: {bundle['work_dir']}/manifest.json."
+                )
             if analysis_kwargs:
                 print(f"Выполняется анализ через {analysis_kwargs['provider_label']}...")
                 try:

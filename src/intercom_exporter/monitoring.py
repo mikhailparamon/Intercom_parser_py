@@ -103,6 +103,8 @@ def run_monitoring(
     api_version: str = "unknown",
     timezone_name: str = "UTC",
     prepare: Callable | None = prepare_monitoring_analysis,
+    agents: bool = True,
+    agent_workers: int = 10,
 ) -> dict[str, Any]:
     window_set = windows or build_monitoring_windows()
     source_name = "backup_3_months" if full_archive else "last_week"
@@ -122,4 +124,14 @@ def run_monitoring(
             Path(snapshots["last_day"]["output_dir"]) / "conversations.json",
             Path(export_result["output_dir"]) / "support-analysis",
         )
+        if agents and analysis:
+            from .agents_orchestration import prepare_agents_bundle
+
+            bundle = prepare_agents_bundle(
+                Path(snapshots["last_week"]["output_dir"]) / "conversations.json",
+                Path(snapshots["last_day"]["output_dir"]) / "conversations.json",
+                Path(analysis["output_dir"]),
+                workers=agent_workers,
+            )
+            analysis = {**analysis, "agents_bundle": bundle}
     return {"export": export_result, "snapshots": snapshots, "analysis": analysis}

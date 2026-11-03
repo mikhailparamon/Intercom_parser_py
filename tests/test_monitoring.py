@@ -238,3 +238,53 @@ def test_monitoring_windows_normalize_input_to_utc(now):
         datetime(2026, 11, 1, 8, tzinfo=timezone.utc),
         datetime(2026, 11, 2, 8, tzinfo=timezone.utc),
     )
+
+
+def _export_two_conversations(output_root):
+    export_dir = Path(output_root) / "run"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    rows = [
+        {"id": "week", "created_at": "2026-10-24T00:00:00Z",
+         "source": {"body": "текст"}, "conversation_parts": {"conversation_parts": []}},
+        {"id": "day", "created_at": "2026-10-30T00:00:00Z",
+         "source": {"body": "текст"}, "conversation_parts": {"conversation_parts": []}},
+    ]
+    (export_dir / "conversations.json").write_text(json.dumps(rows), encoding="utf-8")
+    (export_dir / "manifest.json").write_text(json.dumps({"status": "success"}), encoding="utf-8")
+    return {"output_dir": str(export_dir), "status": "success", "error_count": 0}
+
+
+def test_run_monitoring_creates_agents_bundle_by_default(tmp_path):
+    from intercom_exporter.monitoring import run_monitoring
+    from intercom_exporter.support_analysis import prepare_monitoring_analysis
+
+    windows = build_monitoring_windows(datetime(2026, 10, 31, tzinfo=timezone.utc))
+
+    class FakeExporter:
+        def run(self, period, output_root, **kwargs):
+            return _export_two_conversations(output_root)
+
+    result = run_monitoring(FakeExporter(), tmp_path, windows=windows,
+                            prepare=prepare_monitoring_analysis, agent_workers=3)
+
+    bundle = result["analysis"]["agents_bundle"]
+    assert bundle["taxonomy_source"] == "static_v5"
+    assert bundle["workers"] == 2  # capped at the number of conversations
+    assert (Path(result["analysis"]["output_dir"]) / "agents_work" / "manifest.json").is_file()
+
+
+def test_run_monitoring_agents_bundle_disabled(tmp_path):
+    from intercom_exporter.monitoring import run_monitoring
+    from intercom_exporter.support_analysis import prepare_monitoring_analysis
+
+    windows = build_monitoring_windows(datetime(2026, 10, 31, tzinfo=timezone.utc))
+
+    class FakeExporter:
+        def run(self, period, output_root, **kwargs):
+            return _export_two_conversations(output_root)
+
+    result = run_monitoring(FakeExporter(), tmp_path, windows=windows,
+                            prepare=prepare_monitoring_analysis, agents=False)
+
+    assert "agents_bundle" not in result["analysis"]
+    assert not (Path(result["analysis"]["output_dir"]) / "agents_work").exists()
