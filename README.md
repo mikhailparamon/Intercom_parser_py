@@ -251,7 +251,7 @@ python analyze_support.py prepare-monitoring --week "$runDir\last_week\conversat
 python analyze_support.py merge-agents --week .../last_week/conversations.json --day .../last_day/conversations.json [--compare-with предыдущий/chatgpt_result.json]
 ```
 
-`merge-agents` валидирует результаты (покрытие ID, дубликаты, категории из таксономии), собирает `chatgpt_result.json`, строит `report.md` и `dashboard.html`, а с `--compare-with` — `comparison_report.md`. Отключить пакет: `--no-agents`. Число субагентов: `--workers N` (по умолчанию 10). Режимы `--analyze openrouter|dahl` остаются альтернативой.
+`merge-agents` валидирует результаты (покрытие ID, дубликаты, категории из таксономии), собирает `chatgpt_result.json`, строит `report.md` и `dashboard.html`, а с `--compare-with` — `comparison_report.md`. Общие рекомендации (один блок для отчёта и дашборда, без разбивки по периодам) передаются файлом JSON со списком строк: `--recommendations путь/recommendations.json`. Отключить пакет: `--no-agents`. Число субагентов: `--workers N` (по умолчанию 10). Режимы `--analyze openrouter|dahl` остаются альтернативой.
 
 Анализатор читает новый формат `conversations.json` и поддерживает старые выгрузки `conversations.jsonl`.
 

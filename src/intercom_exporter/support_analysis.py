@@ -491,10 +491,9 @@ def _markdown_report(rows: list[dict], categories: list[dict], classifications: 
         lines.extend(["", "### Обращения с высокой тяжестью", ""])
         for item in high_cases:
             lines.append(f"- `{item['id']}` — {item['category']} / {item['subcategory']}: {item['problem_summary']} (уверенность: {item['confidence']}; основание: {item['severity_reason']})")
-    lines.extend(["", "## Рекомендации", ""])
-    lines.extend(f"- {value.strip()}" for value in result["recommendations"])
-    if not result["recommendations"]:
-        lines.append("Рекомендации не сформированы.")
+    if result["recommendations"]:
+        lines.extend(["", "## Рекомендации", ""])
+        lines.extend(f"- {value.strip()}" for value in result["recommendations"])
     lines.extend(["", "## Ограничения", "", "Тяжесть — качественная оценка по тексту обращений. Она не измеряет число затронутых клиентов, финансовый ущерб или технический масштаб проблемы.", ""])
     return "\n".join(lines), dict(ranked), severity_summary
 
@@ -622,6 +621,8 @@ def generate_monitoring_report(
         day_share = f"{day_count / len(day_rows) * 100:.1f}%" if day_rows else "—"
         lines.append(f"| {name} | {week_count} | {week_share} | {day_count} | {day_share} |")
     lines.extend(["", "## Последние 7 дней", "", week_markdown, "", "## Последний день", "", day_markdown, ""])
+    lines.extend(["## Рекомендации", ""])
+    lines.extend(f"- {value.strip()}" for value in result["recommendations"])
     report_markdown = "\n".join(lines)
 
     if output_dir:
@@ -688,6 +689,7 @@ def build_parser() -> argparse.ArgumentParser:
     merge.add_argument("--day", required=True, help="Исходный conversations.json дневного окна")
     merge.add_argument("--output", help="Каталог анализа (по умолчанию: support-analysis рядом с данными)")
     merge.add_argument("--compare-with", help="Прошлый chatgpt_result.json для отчёта сравнения")
+    merge.add_argument("--recommendations", help="JSON-файл со списком общих рекомендаций для отчёта и дашборда")
     return parser
 
 
@@ -771,7 +773,8 @@ def main(argv: list[str] | None = None) -> int:
 
             week_path, day_path = Path(args.week), Path(args.day)
             output = Path(args.output) if args.output else _default_monitoring_output(week_path, day_path)
-            result = merge_agents_results(week_path, day_path, output, compare_with=args.compare_with)
+            result = merge_agents_results(week_path, day_path, output, compare_with=args.compare_with,
+                                          recommendations=args.recommendations)
             print(
                 f"Слито классификаций: {result['unique_conversation_count']}. Результат: {result['result_path']}. "
                 f"Отчёт: {result['report_path']}. Дашборд: {result['dashboard_path']}"

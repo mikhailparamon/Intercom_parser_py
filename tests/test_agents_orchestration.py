@@ -255,3 +255,49 @@ def test_cli_prepare_monitoring_skips_agents_bundle_when_analyze(tmp_path, monke
     assert code == 0
     assert len(calls) == 1
     assert not (tmp_path / "run" / "support-analysis" / "agents_work").exists()
+
+
+def test_merge_agents_results_uses_recommendations_file(tmp_path):
+    week = _write_conversations(tmp_path / "last_week", ["a", "b"])
+    day = _write_conversations(tmp_path / "last_day", ["a"])
+    out = tmp_path / "support-analysis"
+    manifest = prepare_agents_bundle(week, day, out, workers=2)
+    _fill_results(manifest, category=None)
+    rec_path = tmp_path / "recommendations.json"
+    rec_path.write_text(json.dumps(["Рекомендация 1", "Рекомендация 2"], ensure_ascii=False), encoding="utf-8")
+
+    outcome = merge_agents_results(week, day, out, recommendations=rec_path)
+
+    result = json.loads(Path(outcome["result_path"]).read_text(encoding="utf-8"))
+    assert result["recommendations"] == ["Рекомендация 1", "Рекомендация 2"]
+    assert result["period_analysis"]["week"]["recommendations"] == []
+    assert result["period_analysis"]["day"]["recommendations"] == []
+    report = Path(outcome["report_path"]).read_text(encoding="utf-8")
+    assert report.count("## Рекомендации") == 1
+    assert "Рекомендация 1" in report
+
+
+def test_merge_agents_results_rejects_bad_recommendations(tmp_path):
+    week = _write_conversations(tmp_path / "last_week", ["a", "b"])
+    day = _write_conversations(tmp_path / "last_day", ["a"])
+    out = tmp_path / "support-analysis"
+    manifest = prepare_agents_bundle(week, day, out, workers=2)
+    _fill_results(manifest, category=None)
+    rec_path = tmp_path / "recommendations.json"
+    rec_path.write_text(json.dumps({"not": "a list"}, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(AnalysisError, match="списком непустых строк"):
+        merge_agents_results(week, day, out, recommendations=rec_path)
+
+
+def test_merge_agents_results_accepts_recommendations_list(tmp_path):
+    week = _write_conversations(tmp_path / "last_week", ["a"])
+    day = _write_conversations(tmp_path / "last_day", ["a"])
+    out = tmp_path / "support-analysis"
+    manifest = prepare_agents_bundle(week, day, out, workers=2)
+    _fill_results(manifest, category=None)
+
+    outcome = merge_agents_results(week, day, out, recommendations=["  Общий совет  "])
+
+    result = json.loads(Path(outcome["result_path"]).read_text(encoding="utf-8"))
+    assert result["recommendations"] == ["Общий совет"]

@@ -98,12 +98,13 @@ def build_dashboard_data(
         for name, count in sorted(subcategory_counts.items(), key=lambda item: (-item[1], item[0].casefold()))[:10]
     ]
     severity_week = _severity_breakdown(week_classifications)
-    high_cases = [
+    high_cases_all = [
         {"id": item["id"], "category": item["category"], "subcategory": item["subcategory"],
          "problem_summary": item["problem_summary"]}
         for item in week_classifications
         if item["severity"] == "high"
     ]
+    high_cases = high_cases_all[:10]
     top = week_categories[0] if week_categories else {"name": "—", "count": 0, "share": 0.0}
     billing_week = sum(
         entry["count"] for entry in week_categories
@@ -127,6 +128,7 @@ def build_dashboard_data(
         "subcategories": subcategories,
         "severity": {"week": severity_week, "day": _severity_breakdown(day_classifications)},
         "high_cases": high_cases,
+        "high_cases_total": len(high_cases_all),
         "categories": [{"name": item["name"], "description": item["description"]} for item in categories],
         "recommendations": {
             key: list((recommendations or {}).get(key) or [])
@@ -191,7 +193,7 @@ footer{margin-top:20px;color:var(--muted);font-size:13px;text-align:center}
     <div class="card"><h2>Топ-10 подкатегорий (неделя)</h2><div id="bars-sub"></div></div>
     <div class="card"><h2>Тяжесть обращений</h2><div id="severity"></div></div>
   </div>
-  <div class="card" style="margin-top:14px"><h2>Обращения высокой тяжести (неделя)</h2><div id="high"></div></div>
+  <div class="card" style="margin-top:14px"><h2>Топ-10 обращений высокой тяжести (неделя)</h2><div id="high"></div></div>
   <div class="card" style="margin-top:14px"><h2>Рекомендации</h2><div id="recommendations"></div></div>
   <div class="card" style="margin-top:14px"><h2>Расшифровка категорий</h2><div id="categories"></div></div>
   <div class="card" style="margin-top:14px"><h2>Что такое тяжесть</h2>
@@ -292,12 +294,17 @@ donut("donut-day", "legend-day", DATA.day_categories);
 (function () {
   const el = document.getElementById("high");
   if (!DATA.high_cases.length) { el.textContent = "Обращений высокой тяжести нет."; return; }
-  el.innerHTML = "<table><tr><th>ID</th><th>Категория</th><th>Подкатегория</th><th>Суть проблемы</th></tr>" +
+  const shown = DATA.high_cases.length;
+  const total = DATA.high_cases_total || shown;
+  const note = total > shown
+    ? `<div style="font-size:12px;color:#6b7f88;margin-bottom:6px">Показано ${shown} из ${total} обращений высокой тяжести за неделю.</div>`
+    : "";
+  el.innerHTML = note + "<table><tr><th>ID</th><th>Категория</th><th>Подкатегория</th><th>Суть проблемы</th></tr>" +
     DATA.high_cases.map(c => `<tr><td>${esc(c.id)}</td><td>${esc(c.category)}</td><td>${esc(c.subcategory)}</td><td>${esc(c.problem_summary)}</td></tr>`).join("") + "</table>";
 })();
 
 (function () {
-  const groups = [["week", "Неделя"], ["day", "День"], ["overall", "Общие"]];
+  const groups = [["overall", "Общие рекомендации"]];
   const el = document.getElementById("recommendations");
   const html = groups.map(([key, title]) => {
     const items = DATA.recommendations[key] || [];

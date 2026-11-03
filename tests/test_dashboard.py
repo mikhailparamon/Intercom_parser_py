@@ -190,3 +190,15 @@ def test_build_dashboard_data_includes_categories_and_recommendations():
 def test_build_dashboard_data_defaults_empty_recommendations():
     data = build_dashboard_data(_week_rows(), _day_rows(), CATEGORIES, _classifications(), "w", "d")
     assert data["recommendations"] == {"overall": [], "week": [], "day": []}
+
+
+def test_high_cases_capped_at_top_ten_with_total():
+    rows = [{"id": f"h{i}", "created_at": "2026-10-26T09:00:00Z", "updated_at": "2026-10-26T10:00:00Z"}
+            for i in range(12)]
+    classifications = [_classification(f"h{i}", "Подключение VPN", "Не подключается", "high") for i in range(12)]
+
+    data = build_dashboard_data(rows, rows, CATEGORIES, classifications, "w", "d")
+
+    assert len(data["high_cases"]) == 10
+    assert data["high_cases_total"] == 12
+    assert [case["id"] for case in data["high_cases"]] == [f"h{i}" for i in range(10)]

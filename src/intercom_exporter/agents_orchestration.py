@@ -137,13 +137,36 @@ def _normalized_classification(item: dict) -> dict:
     }
 
 
+def _load_recommendations(recommendations: str | Path | list[str] | None) -> list[str]:
+    """Нормализует общие рекомендации: список строк или JSON-файл со списком строк."""
+    if recommendations is None:
+        return []
+    if isinstance(recommendations, (str, Path)):
+        path = Path(recommendations)
+        try:
+            value = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise AnalysisError(f"Не удалось прочитать рекомендации из {path}: {exc}") from exc
+    else:
+        value = recommendations
+    if not isinstance(value, list) or any(not isinstance(item, str) or not item.strip() for item in value):
+        raise AnalysisError("Рекомендации должны быть списком непустых строк")
+    return [item.strip() for item in value]
+
+
 def merge_agents_results(
     week_input_path: str | Path,
     day_input_path: str | Path,
     output_dir: str | Path,
     compare_with: str | Path | None = None,
+    recommendations: str | Path | list[str] | None = None,
 ) -> dict[str, Any]:
-    """Валидирует result_XX.json субагентов, собирает chatgpt_result.json и строит отчёт+дашборд."""
+    """Валидирует result_XX.json субагентов, собирает chatgpt_result.json и строит отчёт+дашборд.
+
+    Рекомендации — общие для отчёта: либо список строк, либо путь к JSON-файлу
+    со списком строк (обычно формирует агент-оркестратор после слияния).
+    Без них в результат попадает заглушка, периодные разделы рекомендаций не заполняются.
+    """
     output = Path(output_dir)
     work = output / "agents_work"
     manifest_path = work / "manifest.json"
@@ -207,6 +230,7 @@ def merge_agents_results(
                 f"Тяжесть: high {sev.get('high', 0)}, medium {sev.get('medium', 0)}, "
                 f"low {sev.get('low', 0)}, не оценена {sev.get('unknown', 0)}.")
 
+    loaded_recommendations = _load_recommendations(recommendations)
     result = {
         "complete": True,
         "conversation_count": len(classifications),
@@ -214,19 +238,19 @@ def merge_agents_results(
         "categories": TAXONOMY,
         "classifications": classifications,
         "executive_summary": summary("Объединение", set(union_ids)),
-        "recommendations": ["Сформируйте рекомендации по отчёту report.md."],
+        "recommendations": loaded_recommendations or ["Сформируйте рекомендации по отчёту report.md."],
         "period_analysis": {
             "week": {
                 "conversation_count": len(week_rows),
                 "dataset_fingerprint": _build_payload(week_rows)["dataset_fingerprint"],
                 "executive_summary": summary("Неделя", week_ids),
-                "recommendations": ["См. рекомендации объединения."],
+                "recommendations": [],
             },
             "day": {
                 "conversation_count": len(day_rows),
                 "dataset_fingerprint": _build_payload(day_rows)["dataset_fingerprint"],
                 "executive_summary": summary("День", day_ids),
-                "recommendations": ["См. рекомендации объединения."],
+                "recommendations": [],
             },
         },
     }
