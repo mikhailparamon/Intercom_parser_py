@@ -245,6 +245,13 @@ python analyze_support.py prepare-monitoring --week "$runDir\last_week\conversat
 
 Анализ использует фиксированную таксономию из 10 категорий с правилами границ (см. `support_analysis_prompt_template.md`, раздел 3).
 
+**Быстрый старт исследования — две команды без путей:**
+
+```powershell
+python main.py                      # 1. выгрузка за неделю и день + очистка + пакет оркестрации субагентов
+python analyze_support.py research  # 2. проверка оркестрации → слияние → отчёт + дашборд
+```
+
 По умолчанию `prepare-monitoring` дополнительно готовит пакет оркестрации субагентов (`agents_work/`: чанки, `taxonomy.json`, `manifest.json`, `agents_protocol.md`). Дальше агент-оркестратор поднимает субагентов по манифесту (каждый классифицирует свой чанк по `agents_protocol.md`), после чего:
 
 ```bash
