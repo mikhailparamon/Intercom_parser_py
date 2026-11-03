@@ -270,7 +270,7 @@ document.getElementById("kpis").innerHTML = kpis.map(([label, value, sub]) =>
   rows.forEach((r, i) => {
     svg += `<circle cx="${x(i)}" cy="${y(r.count)}" r="4" fill="${PAL[1]}"/>` +
       `<text x="${x(i)}" y="${y(r.count) - 10}" text-anchor="middle" font-size="13">${r.count ? r.count : ""}</text>` +
-      `<text x="${x(i)}" y="${H - PB + 20}" text-anchor="middle" font-size="13" fill="#6b7f88">${r.date.slice(5)}</text>`;
+      `<text x="${x(i)}" y="${H - PB + 20}" text-anchor="middle" font-size="13" fill="#6b7f88">${r.date.slice(8)}.${r.date.slice(5, 7)}</text>`;
   });
   svg += `<text x="${PL + (W - PL - PR) / 2}" y="${H - 6}" text-anchor="middle" font-size="13" fill="#6b7f88">Дата</text>`;
   el.innerHTML = svg + "</svg>";
