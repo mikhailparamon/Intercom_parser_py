@@ -154,6 +154,30 @@ def _load_recommendations(recommendations: str | Path | list[str] | None) -> lis
     return [item.strip() for item in value]
 
 
+def _default_recommendations(classifications: list[dict]) -> list[str]:
+    """Детерминированные рекомендации по статистике классификаций, если оркестратор не передал свои."""
+    total = len(classifications)
+    counts = Counter(item["category"] for item in classifications)
+    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0].casefold()))
+    recommendations = [
+        f"Приоритет разбора — «{name}»: {count} обращений ({count / total * 100:.1f}%). "
+        "Проверьте и обновите шаблонные ответы и инструкции по этой категории."
+        for name, count in ranked[:3]
+    ]
+    high = sum(1 for item in classifications if item["severity"] == "high")
+    if high:
+        recommendations.append(
+            f"Обращений высокой тяжести: {high}. Разберите их вне очереди — это зона прямого оттока клиентов."
+        )
+    unrated = sum(1 for item in classifications if item["severity"] is None)
+    if unrated / total >= 0.2:
+        recommendations.append(
+            f"У {unrated} обращений ({unrated / total * 100:.1f}%) тяжесть не оценена: просите операторов "
+            "фиксировать влияние на клиента при закрытии — это улучшит качество отчётов."
+        )
+    return recommendations
+
+
 def merge_agents_results(
     week_input_path: str | Path,
     day_input_path: str | Path,
@@ -166,7 +190,9 @@ def merge_agents_results(
 
     Рекомендации — общие для отчёта: либо список строк, либо путь к JSON-файлу
     со списком строк (обычно формирует агент-оркестратор после слияния).
-    Без них в результат попадает заглушка, периодные разделы рекомендаций не заполняются.
+    Без них рекомендации выводятся детерминированно из статистики классификаций
+    (топ категорий, высокая тяжесть, доля без оценки), чтобы отчёт и дашборд
+    всегда содержали рекомендации; периодные разделы рекомендаций не заполняются.
     """
     output = Path(output_dir)
     work = output / "agents_work"
@@ -239,7 +265,7 @@ def merge_agents_results(
         "categories": TAXONOMY,
         "classifications": classifications,
         "executive_summary": summary("Объединение", set(union_ids)),
-        "recommendations": loaded_recommendations or ["Сформируйте рекомендации по отчёту report.md."],
+        "recommendations": loaded_recommendations or _default_recommendations(classifications),
         "period_analysis": {
             "week": {
                 "conversation_count": len(week_rows),

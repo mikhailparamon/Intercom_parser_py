@@ -374,6 +374,44 @@ def test_cli_research_waits_for_orchestration(tmp_path, monkeypatch, capsys):
     assert (run / "support-analysis" / "agents_work" / "manifest.json").is_file()
 
 
+def test_merge_agents_results_defaults_recommendations_from_stats(tmp_path):
+    week = _write_conversations(tmp_path / "last_week", ["a", "b"])
+    day = _write_conversations(tmp_path / "last_day", ["a"])
+    out = tmp_path / "support-analysis"
+    manifest = prepare_agents_bundle(week, day, out, workers=2)
+    _fill_results(manifest, category=None)
+
+    outcome = merge_agents_results(week, day, out)
+
+    result = json.loads(Path(outcome["result_path"]).read_text(encoding="utf-8"))
+    recommendations = result["recommendations"]
+    assert recommendations
+    assert "Сформируйте рекомендации" not in recommendations[0]
+    assert "Проблемы подключения VPN" in recommendations[0]
+    assert "2 обращений" in recommendations[0]
+    report = Path(outcome["report_path"]).read_text(encoding="utf-8")
+    assert recommendations[0] in report
+    dashboard = Path(outcome["dashboard_path"]).read_text(encoding="utf-8")
+    assert recommendations[0] in dashboard
+
+
+def test_merge_agents_results_default_recommendations_flag_high_severity(tmp_path):
+    week = _write_conversations(tmp_path / "last_week", ["a"])
+    day = _write_conversations(tmp_path / "last_day", ["a"])
+    out = tmp_path / "support-analysis"
+    manifest = prepare_agents_bundle(week, day, out, workers=2)
+    _fill_results(manifest, category=None)
+    entry = manifest["chunks"][0]
+    result = json.loads(Path(entry["result_path"]).read_text(encoding="utf-8"))
+    result["classifications"][0]["severity"] = "high"
+    Path(entry["result_path"]).write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+
+    outcome = merge_agents_results(week, day, out)
+
+    merged = json.loads(Path(outcome["result_path"]).read_text(encoding="utf-8"))
+    assert any("высокой тяжести: 1" in item for item in merged["recommendations"])
+
+
 def test_cli_research_merges_and_builds_dashboard(tmp_path, monkeypatch):
     from intercom_exporter.support_analysis import main
 
