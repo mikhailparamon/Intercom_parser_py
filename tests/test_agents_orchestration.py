@@ -357,3 +357,39 @@ def test_cli_render_dashboard_from_existing_result(tmp_path, monkeypatch):
 
     assert code == 0
     assert (tmp_path / "dash" / "dashboard.html").is_file()
+
+
+def test_cli_research_waits_for_orchestration(tmp_path, monkeypatch, capsys):
+    from intercom_exporter.support_analysis import main
+
+    run = tmp_path / "data" / "run1"
+    _write_conversations(run / "last_week", ["a"])
+    _write_conversations(run / "last_day", ["a"])
+    monkeypatch.chdir(tmp_path)
+
+    code = main(["research"])
+
+    assert code == 3
+    assert "Оркестрация не завершена" in capsys.readouterr().out
+    assert (run / "support-analysis" / "agents_work" / "manifest.json").is_file()
+
+
+def test_cli_research_merges_and_builds_dashboard(tmp_path, monkeypatch):
+    from intercom_exporter.support_analysis import main
+
+    run = tmp_path / "data" / "run1"
+    week = _write_conversations(run / "last_week", ["a"])
+    day = _write_conversations(run / "last_day", ["a"])
+    out = run / "support-analysis"
+    manifest = prepare_agents_bundle(week, day, out, workers=2)
+    _fill_results(manifest, category=None)
+    (out / "agents_work" / "recommendations.json").write_text(
+        json.dumps(["Совет"], ensure_ascii=False), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    code = main(["research", "--dashboard-dir", str(tmp_path / "dash")])
+
+    assert code == 0
+    assert (tmp_path / "dash" / "dashboard.html").is_file()
+    result = json.loads((out / "chatgpt_result.json").read_text(encoding="utf-8"))
+    assert result["recommendations"] == ["Совет"]

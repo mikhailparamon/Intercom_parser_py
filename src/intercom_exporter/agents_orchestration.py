@@ -160,6 +160,7 @@ def merge_agents_results(
     output_dir: str | Path,
     compare_with: str | Path | None = None,
     recommendations: str | Path | list[str] | None = None,
+    dashboard_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Валидирует result_XX.json субагентов, собирает chatgpt_result.json и строит отчёт+дашборд.
 
@@ -257,7 +258,8 @@ def merge_agents_results(
     result_path = output / "chatgpt_result.json"
     _write_json(result_path, result)
 
-    report = generate_monitoring_report(week_input_path, day_input_path, result_path, output)
+    report = generate_monitoring_report(week_input_path, day_input_path, result_path, output,
+                                        dashboard_dir=dashboard_dir)
     outcome: dict[str, Any] = {
         "unique_conversation_count": len(classifications),
         "result_path": str(result_path),

@@ -763,6 +763,7 @@ def build_parser() -> argparse.ArgumentParser:
     merge.add_argument("--output", help="Каталог анализа (по умолчанию: support-analysis рядом с данными)")
     merge.add_argument("--compare-with", help="Прошлый chatgpt_result.json для отчёта сравнения")
     merge.add_argument("--recommendations", help="JSON-файл со списком общих рекомендаций для отчёта и дашборда")
+    merge.add_argument("--dashboard-dir", help="Каталог для dashboard.html (по умолчанию: каталог отчёта)")
     dash = subparsers.add_parser("render-dashboard", help="Построить dashboard.html из готового chatgpt_result.json без слияния")
     dash.add_argument("--week", help="Исходный conversations.json недельного окна (по умолчанию: последний прогон)")
     dash.add_argument("--day", help="Исходный conversations.json дневного окна (по умолчанию: последний прогон)")
@@ -770,6 +771,12 @@ def build_parser() -> argparse.ArgumentParser:
     dash.add_argument("--result", help="Готовый chatgpt_result.json (по умолчанию: support-analysis рядом с прогоном)")
     dash.add_argument("--output", help="Каталог результатов отчёта")
     dash.add_argument("--dashboard-dir", help="Каталог для dashboard.html (по умолчанию: каталог отчёта)")
+    research = subparsers.add_parser("research", help="Единый прогон: бандл → ожидание оркестрации → merge → дашборд")
+    research.add_argument("--run", help="Каталог прогона в data/ (по умолчанию: последний)")
+    research.add_argument("--workers", type=int, default=10,
+                          help="Число чанков субагентов, если бандл ещё не создан (2–20)")
+    research.add_argument("--compare-with", help="Прошлый chatgpt_result.json для отчёта сравнения")
+    research.add_argument("--dashboard-dir", help="Каталог для dashboard.html")
     return parser
 
 
@@ -859,7 +866,7 @@ def main(argv: list[str] | None = None) -> int:
                 if default_rec.is_file():
                     recommendations = str(default_rec)
             result = merge_agents_results(week_path, day_path, output, compare_with=args.compare_with,
-                                          recommendations=recommendations)
+                                          recommendations=recommendations, dashboard_dir=args.dashboard_dir)
             print(
                 f"Слито классификаций: {result['unique_conversation_count']}. Результат: {result['result_path']}. "
                 f"Отчёт: {result['report_path']}. Дашборд: {result['dashboard_path']}"
@@ -872,6 +879,41 @@ def main(argv: list[str] | None = None) -> int:
             outcome = render_dashboard(week_path, day_path, result_path,
                                        output_dir=args.output, dashboard_dir=args.dashboard_dir)
             print(f"Дашборд: {outcome['dashboard_path']}")
+        elif args.command == "research":
+            from .agents_orchestration import merge_agents_results, prepare_agents_bundle
+
+            run_dir = Path(args.run) if args.run else find_latest_run()
+            week_path = run_dir / "last_week" / "conversations.json"
+            day_path = run_dir / "last_day" / "conversations.json"
+            output = run_dir / "support-analysis"
+            if not (output / "agents_work" / "manifest.json").is_file():
+                bundle = prepare_agents_bundle(week_path, day_path, output, workers=args.workers)
+                print(
+                    f"Пакет оркестрации субагентов готов: {bundle['workers']} чанков. "
+                    f"Манифест: {bundle['work_dir']}/manifest.json"
+                )
+            manifest = json.loads((output / "agents_work" / "manifest.json").read_text(encoding="utf-8-sig"))
+            total = len(manifest["chunks"])
+            ready = sum(1 for entry in manifest["chunks"] if Path(entry["result_path"]).is_file())
+            if ready < total:
+                print(
+                    f"Оркестрация не завершена: готовы результаты {ready} из {total} воркеров. "
+                    "Запустите субагентов по протоколу agents_protocol.md и повторите research."
+                )
+                return 3
+            recommendations = output / "agents_work" / "recommendations.json"
+            result = merge_agents_results(
+                week_path, day_path, output,
+                compare_with=args.compare_with,
+                recommendations=str(recommendations) if recommendations.is_file() else None,
+                dashboard_dir=args.dashboard_dir,
+            )
+            print(
+                f"Слито классификаций: {result['unique_conversation_count']}. Отчёт: {result['report_path']}. "
+                f"Дашборд: {result['dashboard_path']}"
+            )
+            if "comparison_path" in result:
+                print(f"Сравнение с предыдущим прогоном: {result['comparison_path']}")
         else:
             result = generate_monitoring_report(args.week, args.day, args.result, args.output, args.dashboard_dir)
             print(
