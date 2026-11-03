@@ -8,7 +8,6 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from .activity import MEANINGFUL_PART_TYPES
 from .agents_orchestration import BILLING_CATEGORY
 from .support_analysis import _write_text
 
@@ -33,30 +32,16 @@ def _iso_date(value: Any) -> date | None:
             return None
 
 
-def _conversation_activity_day(row: dict[str, Any]) -> date | None:
-    """День последней осмысленной активности обращения (fallback — день создания).
-
-    Поле updated_at не используется: его вздувают системные события
-    (bulk_reassignment и т.п.), что искажало дневной график.
-    """
-    day = _iso_date(row.get("created_at"))
-    parts = row.get("conversation_parts") or []
-    if isinstance(parts, dict):
-        parts = parts.get("conversation_parts") or []
-    if isinstance(parts, list):
-        for part in parts:
-            if isinstance(part, dict) and part.get("part_type") in MEANINGFUL_PART_TYPES:
-                part_day = _iso_date(part.get("created_at"))
-                if part_day and (day is None or part_day > day):
-                    day = part_day
-    return day
-
-
 def _daily_series(week_rows: list[dict]) -> list[dict]:
-    """Счётчики по дням за 7 календарных дней, заканчивая днём последней осмысленной активности."""
+    """Новые обращения по дням за 7 календарных дней, заканчивая днём последнего создания.
+
+    Считается только дата создания (created_at): старые обращения с новой
+    активностью на график не попадают. Поле updated_at не используется —
+    его вздувают системные события (bulk_reassignment и т.п.).
+    """
     dates = []
     for row in week_rows:
-        day = _conversation_activity_day(row)
+        day = _iso_date(row.get("created_at"))
         if day:
             dates.append(day)
     if not dates:
@@ -208,8 +193,8 @@ footer{margin-top:20px;color:var(--muted);font-size:13px;text-align:center}
   </header>
   <div class="kpis" id="kpis"></div>
   <div class="grid">
-    <div class="card"><h2>Обращения по дням (неделя)</h2><div id="chart-daily"></div>
-      <div style="font-size:12px;color:#6b7f88;margin-top:6px">Столбцы — целые даты: обращение считается в день последнего сообщения (или создания). KPI «день» — скользящие 24 часа от момента выгрузки, поэтому последний столбец может немного отличаться.</div>
+    <div class="card"><h2>Новые обращения по дням (неделя)</h2><div id="chart-daily"></div>
+      <div style="font-size:12px;color:#6b7f88;margin-top:6px">Столбцы — целые даты, только новые обращения (по дате создания). Старые обращения с новой активностью здесь не считаются. KPI «день» — скользящие 24 часа от момента выгрузки, поэтому последний столбец может немного отличаться.</div>
     </div>
     <div class="card donut-card"><h2>Категории — неделя</h2><div id="donut-week"></div><div class="legend" id="legend-week"></div></div>
     <div class="card donut-card"><h2>Категории — день</h2><div id="donut-day"></div><div class="legend" id="legend-day"></div></div>
