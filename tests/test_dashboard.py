@@ -112,10 +112,9 @@ def test_write_dashboard_creates_self_contained_offline_html(tmp_path):
     html = path.read_text(encoding="utf-8")
     assert html.startswith("<!DOCTYPE html>")
     assert "Подключение VPN" in html
-    assert '"week_total":3' in html.replace(" ", "")
+    assert "Обращений за неделю" in html
     assert "http" not in html.split("<body")[0].replace("https://", "").replace("http://", "")  # нет CDN в <head>
-    assert "const DATA = " in html
-    assert "</script>" in html
+    assert "<script" not in html  # страница статичная: работает и без JavaScript
 
 
 def test_write_dashboard_names_file_by_generation_date(tmp_path, monkeypatch):
@@ -145,7 +144,7 @@ def test_write_dashboard_writes_data_json_next_to_html(tmp_path):
     assert json.loads(json_path.read_text(encoding="utf-8"))["kpis"]["week_total"] == 3
 
 
-def test_write_combined_dashboard_creates_html_without_iframes_and_json(tmp_path):
+def test_write_combined_dashboard_creates_static_html_and_json(tmp_path):
     data = build_dashboard_data(_week_rows(), _day_rows(), CATEGORIES, _classifications(), "w", "d")
     single_path = write_dashboard(data, tmp_path / "vpn")
     services_data = {"vpn": data}
@@ -158,7 +157,8 @@ def test_write_combined_dashboard_creates_html_without_iframes_and_json(tmp_path
     assert "VPNНаоборот" in html
     assert "data:text/html;base64," not in html
     assert "<iframe" not in html
-    assert 'id="vpn-generated"' in html
+    assert "<script" not in html  # общий дашборд статичный: работает в превью Slack
+    assert 'href="#vpn"' in html
     json_path = path.with_suffix(".json")
     assert json_path.is_file()
     assert json.loads(json_path.read_text(encoding="utf-8"))["vpn"]["kpis"]["week_total"] == 3
@@ -169,7 +169,8 @@ def test_render_dashboard_html_escapes_script_closing_tag():
     rows = [{"id": "a", "updated_at": "2026-11-02T00:00:00Z"}]
     classifications = [_classification("a", "X</script>", "sub", None)]
     html = render_dashboard_html(build_dashboard_data(rows, rows, categories, classifications, "w", "d"))
-    assert "X<\\/script>" in html
+    assert "X</script>" not in html.replace("</style>", "").replace("</script>", "")
+    assert "X&lt;/script&gt;" in html
 
 
 
@@ -216,7 +217,8 @@ def test_generate_monitoring_report_writes_dashboard(tmp_path):
     dashboard_path = dashboards[0]
     assert outcome["dashboard_path"] == str(dashboard_path)
     html = dashboard_path.read_text(encoding="utf-8")
-    assert '"week_total":3' in html.replace(" ", "")
+    assert "Обращений за неделю" in html
+    assert '<div class="value">3</div>' in html
 
 
 def test_generate_monitoring_report_defaults_dashboard_next_to_report(tmp_path):
