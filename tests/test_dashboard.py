@@ -145,7 +145,7 @@ def test_write_dashboard_writes_data_json_next_to_html(tmp_path):
     assert json.loads(json_path.read_text(encoding="utf-8"))["kpis"]["week_total"] == 3
 
 
-def test_write_combined_dashboard_creates_html_with_iframes_and_json(tmp_path):
+def test_write_combined_dashboard_creates_html_without_iframes_and_json(tmp_path):
     data = build_dashboard_data(_week_rows(), _day_rows(), CATEGORIES, _classifications(), "w", "d")
     single_path = write_dashboard(data, tmp_path / "vpn")
     services_data = {"vpn": data}
@@ -156,7 +156,9 @@ def test_write_combined_dashboard_creates_html_with_iframes_and_json(tmp_path):
     assert path.name.startswith("dashboard_") and path.name.endswith(".html")
     html = path.read_text(encoding="utf-8")
     assert "VPNНаоборот" in html
-    assert "data:text/html;base64," in html
+    assert "data:text/html;base64," not in html
+    assert "<iframe" not in html
+    assert 'id="vpn-generated"' in html
     json_path = path.with_suffix(".json")
     assert json_path.is_file()
     assert json.loads(json_path.read_text(encoding="utf-8"))["vpn"]["kpis"]["week_total"] == 3

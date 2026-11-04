@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import json
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
@@ -338,10 +337,18 @@ donut("donut-day", "legend-day", DATA.day_categories);
 """
 
 
-def render_dashboard_html(data: dict) -> str:
-    """Возвращает самодостаточный офлайн HTML с внедрёнными данными (без внешних ресурсов)."""
+def render_dashboard_html(data: dict, prefix: str = "") -> str:
+    """Возвращает самодостаточный офлайн HTML с внедрёнными данными (без внешних ресурсов).
+
+    ``prefix`` добавляется ко всем id элементов и ссылкам getElementById —
+    нужен для встраивания нескольких дашбордов на одну страницу без конфликтов.
+    """
     payload = json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
-    return _TEMPLATE.replace("__DASHBOARD_DATA__", payload)
+    html = _TEMPLATE.replace("__DASHBOARD_DATA__", payload)
+    if prefix:
+        html = html.replace('id="', f'id="{prefix}')
+        html = html.replace('document.getElementById("', f'document.getElementById("{prefix}')
+    return html
 
 
 def write_dashboard(data: dict, output_dir: str | Path) -> Path:
@@ -365,26 +372,50 @@ _COMBINED_TEMPLATE = """<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Мониторинг обращений — VPNНаоборот и HyperTube</title>
 <style>
-:root{--teal:#087f82;--bg:#f3f7f8;--text:#1d2b33;--muted:#6b7f88;--border:#e3ecef}
+:root{--teal:#087f82;--blue:#08a9df;--bg:#f3f7f8;--card:#fff;--text:#1d2b33;--muted:#6b7f88;--border:#e3ecef}
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--text);padding:16px}
+body{font-family:"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--text);padding:24px;font-size:16px}
 .wrap{max-width:1200px;margin:0 auto}
-header{display:flex;align-items:center;gap:12px;margin-bottom:14px}
-h1{font-size:22px}
+header{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-bottom:20px}
+h1{font-size:26px}
+.badge{background:var(--teal);color:#fff;border-radius:12px;padding:2px 10px;font-size:13px}
+.period{color:var(--muted);font-size:14px}
 .tabs{display:flex;gap:8px;margin-bottom:12px;border-bottom:1px solid var(--border);padding-bottom:8px}
 .tab{background:#fff;border:1px solid var(--border);border-radius:8px;padding:8px 16px;cursor:pointer;font-size:14px}
 .tab.active{background:var(--teal);color:#fff;border-color:var(--teal)}
-.tab-content{display:none;width:100%;height:calc(100vh - 130px);border:none;border-radius:12px;background:#fff;border:1px solid var(--border)}
+.tab-content{display:none}
 .tab-content.active{display:block}
-footer{margin-top:12px;color:var(--muted);font-size:12px;text-align:center}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-bottom:20px}
+.kpi{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px}
+.kpi .label{font-size:13px;color:var(--muted);text-transform:uppercase}
+.kpi .value{font-size:26px;font-weight:600;margin-top:4px}
+.kpi .sub{font-size:13px;color:var(--muted)}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.grid .card:first-child{grid-column:1/-1}
+@media (max-width:720px){.grid{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px}
+.card h2{font-size:17px;margin-bottom:12px}
+.legend{display:flex;flex-wrap:wrap;gap:8px;font-size:14px;margin-top:10px}
+.donut-card{display:flex;flex-wrap:wrap;align-items:center}
+.donut-card h2{width:100%}
+.donut-card .legend{flex:1;flex-direction:column;align-items:flex-start;margin-top:0}
+.legend span{display:inline-flex;align-items:center;gap:4px}
+.dot{width:10px;height:10px;border-radius:50%;display:inline-block}
+.bar-row{display:grid;grid-template-columns:minmax(120px,220px) 1fr 48px;gap:8px;align-items:center;font-size:14px;margin:5px 0}
+.bar{height:14px;border-radius:7px}
+.bar-bg{background:#eef4f6;border-radius:7px;overflow:hidden}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--border);vertical-align:top}
+th{color:var(--muted);font-weight:600}
+footer{margin-top:20px;color:var(--muted);font-size:13px;text-align:center}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <header><h1>Мониторинг обращений поддержки</h1></header>
+  <header><h1>Мониторинг обращений поддержки</h1><span class="badge">__GENERATED_AT__</span></header>
   <div class="tabs" id="tabs">__TABS__</div>
-  __IFRAMES__
-  <footer>Сгенерировано __GENERATED_AT__ UTC</footer>
+  __SECTIONS__
+  <footer>Сгенерировано автоматически: analyze_support.py research</footer>
 </div>
 <script>
 function switchTab(id){
@@ -400,32 +431,41 @@ document.getElementById('tabs').addEventListener('click', e=>{
 """
 
 
+def _extract_body_inner(html: str) -> str:
+    """Возвращает содержимое <body>...</body> без тегов <html>/<body>."""
+    start = html.index("<body>") + len("<body>")
+    end = html.index("</body>")
+    return html[start:end]
+
+
 def write_combined_dashboard(
     services_data: dict[str, dict],
-    services_html: dict[str, str],
+    services_html: dict[str, str] | None,
     output_dir: str | Path,
 ) -> Path:
-    """Собирает общий дашборд с вкладками из HTML каждого сервиса.
+    """Собирает общий дашборд с вкладками без iframe: каждый сервис
+    рендерится в своём контейнере с префиксом id, поэтому страница
+    работает в превью Slack и других ограниченных webview.
 
-    Каждый сервисный дашборд встраивается через iframe с data-URL (base64),
-    чтобы избежать конфликтов id и скриптов между вкладками.
+    ``services_html`` сохранён в сигнатуре для совместимости, но не используется.
     """
     stamp = datetime.now(timezone.utc).strftime("%d_%m_%Y")
     output_path = Path(output_dir) / f"dashboard_{stamp}.html"
     tabs = []
-    iframes = []
+    sections = []
     first = True
     for sid in SERVICES:
-        if sid not in services_html:
+        if sid not in services_data:
             continue
         label = SERVICES[sid].label
         active = " active" if first else ""
         tabs.append(f'<button class="tab{active}" data-tab="{sid}">{label}</button>')
-        encoded = base64.b64encode(services_html[sid].encode("utf-8")).decode("ascii")
-        iframes.append(f'<iframe id="{sid}" class="tab-content{active}" src="data:text/html;base64,{encoded}"></iframe>')
+        single = render_dashboard_html(services_data[sid], prefix=f"{sid}-")
+        body = _extract_body_inner(single)
+        sections.append(f'<div id="{sid}" class="tab-content{active}">{body}</div>')
         first = False
     html = _COMBINED_TEMPLATE.replace("__TABS__", "".join(tabs)) \
-                           .replace("__IFRAMES__", "".join(iframes)) \
+                           .replace("__SECTIONS__", "".join(sections)) \
                            .replace("__GENERATED_AT__", datetime.now(timezone.utc).isoformat(timespec="minutes"))
     _write_text(output_path, html)
     _write_text(output_path.with_suffix(".json"),

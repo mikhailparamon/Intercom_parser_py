@@ -1059,7 +1059,6 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 services = list(iter_services())
                 service_dashboards: dict[str, Path] = {}
-                run_root_candidates: list[Path] = []
                 for service in services:
                     try:
                         run_dir = _service_run_dir(service, args.run)
@@ -1069,10 +1068,8 @@ def main(argv: list[str] | None = None) -> int:
                     dashboards = sorted(analysis.glob("dashboard_*.html"))
                     if dashboards:
                         service_dashboards[service.id] = dashboards[-1]
-                        run_root_candidates.append(run_dir.parent)
                 if len(service_dashboards) > 1:
-                    run_root = sorted(run_root_candidates)[-1]
-                    dashboard_path = _build_combined_dashboard(run_root, service_dashboards)
+                    dashboard_path = _build_combined_dashboard(service_dashboards)
                 elif service_dashboards:
                     dashboard_path = next(iter(service_dashboards.values()))
                 else:
