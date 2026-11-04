@@ -219,6 +219,7 @@ footer{margin-top:20px;color:var(--muted);font-size:13px;text-align:center}
   <footer>Сгенерировано автоматически: analyze_support.py report-monitoring</footer>
 </div>
 <script>
+(function () {
 const DATA = __DASHBOARD_DATA__;
 const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const PAL = DATA.palette;
@@ -330,6 +331,7 @@ donut("donut-day", "legend-day", DATA.day_categories);
   if (!DATA.categories.length) { el.textContent = "Нет данных о категориях."; return; }
   el.innerHTML = "<table><tr><th>Категория</th><th>Описание</th></tr>" +
     DATA.categories.map(c => `<tr><td>${esc(c.name)}</td><td>${esc(c.description)}</td></tr>`).join("") + "</table>";
+})();
 })();
 </script>
 </body>
