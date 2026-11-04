@@ -778,7 +778,7 @@ def build_parser() -> argparse.ArgumentParser:
     for cmd in (merge, research):
         cmd.add_argument("--no-notify", action="store_true",
                          help="Не отправлять дашборд в Slack после построения (по умолчанию отправляется, если заданы SLACK_BOT_TOKEN и SLACK_CHANNEL_ID)")
-    notify = subparsers.add_parser("notify-slack", help="Отправить dashboard.html и сводку отчёта в Slack-канал")
+    notify = subparsers.add_parser("notify-slack", help="Отправить dashboard.html и статистику дашборда в Slack-канал")
     notify.add_argument("--run", help="Каталог прогона в data/ (по умолчанию: последний)")
     notify.add_argument("--channel", help="ID канала Slack (по умолчанию: SLACK_CHANNEL_ID из .env)")
     return parser
@@ -803,7 +803,7 @@ def _maybe_notify_slack(args: argparse.Namespace, result: dict) -> None:
 
     try:
         file_id = send_dashboard(settings.bot_token, settings.channel_id,
-                                 result["dashboard_path"], result["report_path"])
+                                 result["dashboard_path"])
     except (SlackNotifyError, OSError, requests.RequestException) as exc:
         print(f"Slack-уведомление не отправлено: {exc}")
         return
@@ -915,8 +915,7 @@ def main(argv: list[str] | None = None) -> int:
             dashboards = sorted(analysis.glob("dashboard_*.html"))
             if not dashboards:
                 raise AnalysisError(f"Дашборд не найден: {analysis}/dashboard_DD_MM_YYYY.html")
-            file_id = send_dashboard(settings.bot_token, channel,
-                                     dashboards[-1], analysis / "report.md")
+            file_id = send_dashboard(settings.bot_token, channel, dashboards[-1])
             print(f"Дашборд отправлен в Slack (канал {channel}), file_id: {file_id}")
         else:
             result = generate_monitoring_report(args.week, args.day, args.result, args.output, args.dashboard_dir)

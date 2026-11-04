@@ -196,8 +196,8 @@ footer{margin-top:20px;color:var(--muted);font-size:13px;text-align:center}
     <div class="card"><h2>Новые обращения по дням (неделя)</h2><div id="chart-daily"></div>
       <div style="font-size:12px;color:#6b7f88;margin-top:6px">Столбцы — целые даты, только новые обращения (по дате создания). Старые обращения с новой активностью здесь не считаются. KPI «день» — скользящие 24 часа от момента выгрузки, поэтому последний столбец может немного отличаться.</div>
     </div>
-    <div class="card donut-card"><h2>Категории — неделя</h2><div id="donut-week"></div><div class="legend" id="legend-week"></div></div>
-    <div class="card donut-card"><h2>Категории — день</h2><div id="donut-day"></div><div class="legend" id="legend-day"></div></div>
+    <div class="card donut-card"><h2>Категории — всего за неделю</h2><div id="donut-week"></div><div class="legend" id="legend-week"></div></div>
+    <div class="card donut-card"><h2>Категории — всего за сутки</h2><div id="donut-day"></div><div class="legend" id="legend-day"></div></div>
     <div class="card"><h2>Топ-10 подкатегорий (неделя)</h2><div id="bars-sub"></div></div>
     <div class="card"><h2>Тяжесть обращений</h2><div id="severity"></div></div>
   </div>
@@ -342,8 +342,14 @@ def render_dashboard_html(data: dict) -> str:
 
 
 def write_dashboard(data: dict, output_dir: str | Path) -> Path:
-    """Атомно записывает dashboard_DD_MM_YYYY.html (дата генерации, UTC) в output_dir."""
+    """Атомно записывает dashboard_DD_MM_YYYY.html (дата генерации, UTC) в output_dir.
+
+    Рядом пишет dashboard_DD_MM_YYYY.json с теми же данными — из него
+    notify_slack строит текст сообщения в Slack.
+    """
     stamp = datetime.now(timezone.utc).strftime("%d_%m_%Y")
     output_path = Path(output_dir) / f"dashboard_{stamp}.html"
     _write_text(output_path, render_dashboard_html(data))
+    _write_text(output_path.with_suffix(".json"),
+                json.dumps(data, ensure_ascii=False, indent=2))
     return output_path

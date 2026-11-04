@@ -135,6 +135,16 @@ def test_write_dashboard_names_file_by_generation_date(tmp_path, monkeypatch):
     assert path == tmp_path / "dashboard_03_11_2026.html"
 
 
+def test_write_dashboard_writes_data_json_next_to_html(tmp_path):
+    data = build_dashboard_data(_week_rows(), _day_rows(), CATEGORIES, _classifications(), "w", "d")
+
+    path = write_dashboard(data, tmp_path)
+
+    json_path = path.with_suffix(".json")
+    assert json_path.is_file()
+    assert json.loads(json_path.read_text(encoding="utf-8"))["kpis"]["week_total"] == 3
+
+
 def test_render_dashboard_html_escapes_script_closing_tag():
     categories = [{"name": "X</script>", "description": "d"}]
     rows = [{"id": "a", "updated_at": "2026-11-02T00:00:00Z"}]

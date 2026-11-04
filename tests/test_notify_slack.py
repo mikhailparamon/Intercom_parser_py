@@ -3,7 +3,7 @@ import json
 import pytest
 
 from intercom_exporter.config import load_slack_settings
-from intercom_exporter.notify_slack import SlackNotifyError, _extract_summary, send_dashboard
+from intercom_exporter.notify_slack import SlackNotifyError, build_slack_summary, send_dashboard
 
 
 class _FakeResponse:
@@ -34,20 +34,82 @@ class _FakeSession:
         return _FakeResponse()  # POST содержимого на upload_url
 
 
-def _write_dashboard(tmp_path):
+def _write_dashboard(tmp_path, data=None):
     path = tmp_path / "dashboard.html"
     path.write_text("<html>dash</html>", encoding="utf-8")
+    if data is not None:
+        path.with_suffix(".json").write_text(
+            json.dumps(data, ensure_ascii=False), encoding="utf-8")
     return path
 
 
+def _summary_data():
+    return {
+        "kpis": {"day_total": 111, "week_total": 887},
+        "daily": [
+            {"date": "2026-10-29", "count": 90},
+            {"date": "2026-10-30", "count": 95},
+            {"date": "2026-10-31", "count": 80},
+            {"date": "2026-11-01", "count": 90},
+            {"date": "2026-11-02", "count": 100},
+            {"date": "2026-11-03", "count": 50},
+            {"date": "2026-11-04", "count": 30},
+        ],
+        "day_categories": [
+            {"name": "Проблемы подключения VPN", "count": 35, "share": 31.5},
+            {"name": "Оплата и управление подпиской", "count": 24, "share": 21.6},
+            {"name": "Доступ к сайтам и сервисам", "count": 12, "share": 10.8},
+            {"name": "Прочие обращения", "count": 11, "share": 9.9},
+        ],
+        "week_categories": [
+            {"name": "Проблемы подключения VPN", "count": 337, "share": 38.0},
+            {"name": "Оплата и управление подпиской", "count": 176, "share": 19.8},
+        ],
+    }
+
+
+def test_build_slack_summary_formats_day_and_week_stats():
+    text = build_slack_summary(_summary_data())
+
+    assert text.splitlines() == [
+        "За сутки: 111 обращений всего (Новых за 03.11: 50 шт., -50.0% к 02.11)",
+        "Топ-3 категорий за сутки: 1. Проблемы подключения VPN — 35 (31.5%) "
+        "2. Оплата и управление подпиской — 24 (21.6%) "
+        "3. Доступ к сайтам и сервисам — 12 (10.8%)",
+        "За неделю: 887 обращений всего",
+        "Топ-3 категорий за неделю: 1. Проблемы подключения VPN — 337 (38.0%) "
+        "2. Оплата и управление подпиской — 176 (19.8%)",
+    ]
+
+
+def test_build_slack_summary_na_when_previous_day_has_zero():
+    data = _summary_data()
+    data["daily"][-3]["count"] = 0
+
+    assert "(Новых за 03.11: 50 шт., н/д к 02.11)" in build_slack_summary(data)
+
+
+def test_build_slack_summary_skips_change_line_with_short_daily():
+    data = _summary_data()
+    data["daily"] = data["daily"][-2:]
+
+    text = build_slack_summary(data)
+    assert "(Новых за" not in text
+    assert text.splitlines()[0] == "За сутки: 111 обращений всего"
+
+
+def test_build_slack_summary_without_categories():
+    data = _summary_data()
+    data["day_categories"] = []
+
+    assert "Топ-3 категорий за сутки: нет данных" in build_slack_summary(data)
+
+
 def test_send_dashboard_uploads_file_with_summary(tmp_path):
-    dashboard = _write_dashboard(tmp_path)
-    report = tmp_path / "report.md"
-    report.write_text("# Отчёт\n\n## Последние 7 дней\n\n## Резюме\n\nНеделя: 10 обращений.\n\n## Частота проблем\n",
-                      encoding="utf-8")
+    dashboard = _write_dashboard(tmp_path, _summary_data())
     session = _FakeSession()
 
-    file_id = send_dashboard("xoxb-test", "C123", dashboard, report, session=session)
+    file_id = send_dashboard("xoxb-test", "C123", dashboard, session=session)
 
     assert file_id == "F123"
     assert len(session.calls) == 3
@@ -61,7 +123,18 @@ def test_send_dashboard_uploads_file_with_summary(tmp_path):
     assert url.endswith("files.completeUploadExternal")
     assert kwargs["json"]["channel_id"] == "C123"
     assert kwargs["json"]["files"] == [{"id": "F123", "title": "dashboard.html"}]
-    assert "Неделя: 10 обращений." in kwargs["json"]["initial_comment"]
+    comment = kwargs["json"]["initial_comment"]
+    assert "За сутки: 111 обращений всего" in comment
+    assert "За неделю: 887 обращений всего" in comment
+
+
+def test_send_dashboard_without_data_json_sends_empty_comment(tmp_path):
+    dashboard = _write_dashboard(tmp_path)
+    session = _FakeSession()
+
+    send_dashboard("xoxb-test", "C123", dashboard, session=session)
+
+    assert session.calls[2][1]["json"]["initial_comment"] == ""
 
 
 def test_send_dashboard_raises_on_slack_error(tmp_path):
@@ -70,16 +143,6 @@ def test_send_dashboard_raises_on_slack_error(tmp_path):
 
     with pytest.raises(SlackNotifyError, match="invalid_auth"):
         send_dashboard("xoxb-bad", "C123", dashboard, session=session)
-
-
-def test_extract_summary_returns_first_resume_block(tmp_path):
-    report = tmp_path / "report.md"
-    report.write_text("# T\n\n## Резюме\n\nСтрока один.\nСтрока два.\n\n## Дальше\n", encoding="utf-8")
-    assert _extract_summary(report) == "Строка один. Строка два."
-
-
-def test_extract_summary_missing_report_returns_empty(tmp_path):
-    assert _extract_summary(tmp_path / "нет.md") == ""
 
 
 def test_load_slack_settings_reads_env_file(tmp_path):
@@ -107,7 +170,6 @@ def test_cli_notify_slack_sends_latest_run(tmp_path, monkeypatch):
     run = tmp_path / "data" / "run1" / "support-analysis"
     run.mkdir(parents=True)
     (run / "dashboard_03_11_2026.html").write_text("<html></html>", encoding="utf-8")
-    (run / "report.md").write_text("## Резюме\n\nСводка.\n", encoding="utf-8")
     # find_latest_run требует срезы last_week/last_day
     (run.parent / "last_week").mkdir()
     (run.parent / "last_day").mkdir()
@@ -118,14 +180,14 @@ def test_cli_notify_slack_sends_latest_run(tmp_path, monkeypatch):
                         lambda: config.SlackSettings("xoxb-test", "C123"))
     calls = []
 
-    def fake_send(token, channel, dashboard_path, report_path):
-        calls.append((token, channel, dashboard_path.name, report_path.name))
+    def fake_send(token, channel, dashboard_path):
+        calls.append((token, channel, dashboard_path.name))
         return "F123"
 
     monkeypatch.setattr(notify_slack, "send_dashboard", fake_send)
 
     assert main(["notify-slack"]) == 0
-    assert calls == [("xoxb-test", "C123", "dashboard_03_11_2026.html", "report.md")]
+    assert calls == [("xoxb-test", "C123", "dashboard_03_11_2026.html")]
 
 
 def test_cli_notify_slack_requires_token(tmp_path, monkeypatch, capsys):
@@ -180,7 +242,7 @@ def _merge_run(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(
         notify_slack, "send_dashboard",
-        lambda token, channel, dash, report: calls.append((token, channel)) or "F123")
+        lambda token, channel, dash: calls.append((token, channel)) or "F123")
     return calls
 
 
