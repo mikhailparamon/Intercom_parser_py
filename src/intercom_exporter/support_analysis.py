@@ -912,8 +912,11 @@ def main(argv: list[str] | None = None) -> int:
                 parser.error("notify-slack: задайте SLACK_BOT_TOKEN и SLACK_CHANNEL_ID в .env (или передайте --channel)")
             run_dir = Path(args.run) if args.run else find_latest_run()
             analysis = run_dir / "support-analysis"
+            dashboards = sorted(analysis.glob("dashboard_*.html"))
+            if not dashboards:
+                raise AnalysisError(f"Дашборд не найден: {analysis}/dashboard_DD_MM_YYYY.html")
             file_id = send_dashboard(settings.bot_token, channel,
-                                     analysis / "dashboard.html", analysis / "report.md")
+                                     dashboards[-1], analysis / "report.md")
             print(f"Дашборд отправлен в Slack (канал {channel}), file_id: {file_id}")
         else:
             result = generate_monitoring_report(args.week, args.day, args.result, args.output, args.dashboard_dir)

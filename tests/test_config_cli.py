@@ -223,10 +223,11 @@ def test_cli_standard_default_dry_run_shows_slug_directory(monkeypatch, capsys):
         datetime(2026, 10, 26, 8, 15, 30, tzinfo=timezone.utc),
         datetime(2026, 11, 2, 8, 15, 30, tzinfo=timezone.utc),
     ))
+    monkeypatch.setattr(cli, "run_dir_name", lambda: "02_11_2026_08_15")
 
     assert cli.main(["--standard", "--dry-run"]) == 0
     output = capsys.readouterr().out
-    assert "20261026T081530Z_20261102T081530Z" in output
+    assert "02_11_2026_08_15" in output
 
 
 def test_cli_requires_standard_flag_for_explicit_dates():

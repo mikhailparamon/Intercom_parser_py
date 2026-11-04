@@ -74,6 +74,12 @@ def parse_date_range(start: str | None, end: str | None) -> DateRange:
     return DateRange(parsed_start, parsed_end)
 
 
+def run_dir_name(now: datetime | None = None) -> str:
+    """Имя папки прогона: дата и время создания в UTC, DD_MM_YYYY_HH_MM."""
+    current = _ensure_utc(now or datetime.now(timezone.utc))
+    return current.strftime("%d_%m_%Y_%H_%M")
+
+
 def default_range(now: datetime | None = None) -> DateTimeRange:
     """Скользящая неделя: ровно последние 7 * 24 часа от момента запуска (UTC)."""
     current = now or datetime.now(timezone.utc)

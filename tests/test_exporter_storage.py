@@ -1,4 +1,5 @@
 import json
+import re
 import threading
 import time
 from datetime import date, datetime, timezone
@@ -454,7 +455,7 @@ def test_important_fields_use_pretty_json_array_and_keep_iso_utc_timestamps(tmp_
     assert "custom_api_field" not in row
 
 
-def test_run_with_datetime_range_names_dir_by_slug_and_writes_exact_manifest(tmp_path):
+def test_run_with_datetime_range_names_dir_by_creation_time_and_writes_exact_manifest(tmp_path):
     period = DateTimeRange(
         datetime(2026, 11, 1, 8, tzinfo=timezone.utc),
         datetime(2026, 11, 2, 8, tzinfo=timezone.utc),
@@ -464,7 +465,8 @@ def test_run_with_datetime_range_names_dir_by_slug_and_writes_exact_manifest(tmp
 
     result = ConversationExporter(client).run(period, tmp_path)
 
-    assert Path(result["output_dir"]).name == "20261101T080000Z_20261102T080000Z"
+    name = Path(result["output_dir"]).name
+    assert re.fullmatch(r"\d{2}_\d{2}_\d{4}_\d{2}_\d{2}", name), name
     manifest = json.loads((Path(result["output_dir"]) / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["start"] == "2026-11-01T08:00:00+00:00"
     assert manifest["end_exclusive"] == "2026-11-02T08:00:00+00:00"

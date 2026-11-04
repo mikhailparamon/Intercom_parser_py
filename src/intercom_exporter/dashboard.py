@@ -342,7 +342,8 @@ def render_dashboard_html(data: dict) -> str:
 
 
 def write_dashboard(data: dict, output_dir: str | Path) -> Path:
-    """Атомарно записывает dashboard.html в output_dir и возвращает путь."""
-    output_path = Path(output_dir) / "dashboard.html"
+    """Атомно записывает dashboard_DD_MM_YYYY.html (дата генерации, UTC) в output_dir."""
+    stamp = datetime.now(timezone.utc).strftime("%d_%m_%Y")
+    output_path = Path(output_dir) / f"dashboard_{stamp}.html"
     _write_text(output_path, render_dashboard_html(data))
     return output_path

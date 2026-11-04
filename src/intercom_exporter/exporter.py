@@ -7,7 +7,7 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .activity import has_meaningful_activity
-from .dates import DateRange, DateTimeRange
+from .dates import DateRange, DateTimeRange, run_dir_name
 from .storage import JsonStore
 
 logger = logging.getLogger(__name__)
@@ -44,7 +44,10 @@ class ConversationExporter:
                            started_at: datetime) -> Path:
         root = Path(output_root)
         root.mkdir(parents=True, exist_ok=True)
-        base_name = date_range.slug
+        if isinstance(date_range, DateTimeRange):
+            base_name = run_dir_name(started_at)
+        else:
+            base_name = date_range.slug
         output_dir = root / base_name
         try:
             output_dir.mkdir()

@@ -107,7 +107,8 @@ def test_daily_series_falls_back_to_created_at_when_updated_at_unparseable():
 def test_write_dashboard_creates_self_contained_offline_html(tmp_path):
     data = build_dashboard_data(_week_rows(), _day_rows(), CATEGORIES, _classifications(), "w", "d")
     path = write_dashboard(data, tmp_path)
-    assert path == tmp_path / "dashboard.html"
+    assert path.parent == tmp_path
+    assert path.name.startswith("dashboard_") and path.name.endswith(".html")
     html = path.read_text(encoding="utf-8")
     assert html.startswith("<!DOCTYPE html>")
     assert "Подключение VPN" in html
@@ -115,6 +116,23 @@ def test_write_dashboard_creates_self_contained_offline_html(tmp_path):
     assert "http" not in html.split("<body")[0].replace("https://", "").replace("http://", "")  # нет CDN в <head>
     assert "const DATA = " in html
     assert "</script>" in html
+
+
+def test_write_dashboard_names_file_by_generation_date(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+    import intercom_exporter.dashboard as dashboard_module
+
+    class _FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 11, 3, 15, 40, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(dashboard_module, "datetime", _FixedDatetime)
+    data = build_dashboard_data(_week_rows(), _day_rows(), CATEGORIES, _classifications(), "w", "d")
+
+    path = write_dashboard(data, tmp_path)
+
+    assert path == tmp_path / "dashboard_03_11_2026.html"
 
 
 def test_render_dashboard_html_escapes_script_closing_tag():
@@ -164,8 +182,9 @@ def test_generate_monitoring_report_writes_dashboard(tmp_path):
 
     outcome = generate_monitoring_report(week_path, day_path, result_path, dashboard_dir=dashboard_dir)
 
-    dashboard_path = dashboard_dir / "dashboard.html"
-    assert dashboard_path.is_file()
+    dashboards = list(dashboard_dir.glob("dashboard_*.html"))
+    assert len(dashboards) == 1
+    dashboard_path = dashboards[0]
     assert outcome["dashboard_path"] == str(dashboard_path)
     html = dashboard_path.read_text(encoding="utf-8")
     assert '"week_total":3' in html.replace(" ", "")
@@ -181,9 +200,9 @@ def test_generate_monitoring_report_defaults_dashboard_next_to_report(tmp_path):
 
     outcome = generate_monitoring_report(week_path, day_path, result_path)
 
-    expected = tmp_path / "run" / "support-analysis" / "dashboard.html"
-    assert expected.is_file()
-    assert outcome["dashboard_path"] == str(expected)
+    dashboards = list((tmp_path / "run" / "support-analysis").glob("dashboard_*.html"))
+    assert len(dashboards) == 1
+    assert outcome["dashboard_path"] == str(dashboards[0])
 
 
 def test_build_dashboard_data_includes_categories_and_recommendations():

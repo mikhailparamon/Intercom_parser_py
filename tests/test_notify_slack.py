@@ -106,7 +106,7 @@ def test_cli_notify_slack_sends_latest_run(tmp_path, monkeypatch):
 
     run = tmp_path / "data" / "run1" / "support-analysis"
     run.mkdir(parents=True)
-    (run / "dashboard.html").write_text("<html></html>", encoding="utf-8")
+    (run / "dashboard_03_11_2026.html").write_text("<html></html>", encoding="utf-8")
     (run / "report.md").write_text("## Резюме\n\nСводка.\n", encoding="utf-8")
     # find_latest_run требует срезы last_week/last_day
     (run.parent / "last_week").mkdir()
@@ -125,7 +125,7 @@ def test_cli_notify_slack_sends_latest_run(tmp_path, monkeypatch):
     monkeypatch.setattr(notify_slack, "send_dashboard", fake_send)
 
     assert main(["notify-slack"]) == 0
-    assert calls == [("xoxb-test", "C123", "dashboard.html", "report.md")]
+    assert calls == [("xoxb-test", "C123", "dashboard_03_11_2026.html", "report.md")]
 
 
 def test_cli_notify_slack_requires_token(tmp_path, monkeypatch, capsys):

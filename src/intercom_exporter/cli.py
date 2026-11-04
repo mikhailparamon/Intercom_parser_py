@@ -5,7 +5,7 @@ from pathlib import Path
 
 from .client import IntercomAPIError, IntercomClient
 from .config import load_agent_workers, load_config
-from .dates import default_range, parse_date_range
+from .dates import default_range, parse_date_range, run_dir_name, DateRange
 from .exporter import ConversationExporter, format_duration, resolve_timezone
 from .monitoring import build_monitoring_windows, run_monitoring
 from .support_analysis import AnalysisError, prepare_analysis, prepare_monitoring_analysis
@@ -74,7 +74,8 @@ def main(argv: list[str] | None = None) -> int:
         selection = args.selection or "all"
         fields = args.fields or "important"
         if args.dry_run:
-            base_output_dir = Path(args.output) / date_range.slug
+            base_name = date_range.slug if isinstance(date_range, DateRange) else run_dir_name()
+            base_output_dir = Path(args.output) / base_name
             print(f"Обычный экспорт UTC: [{date_range.start}, {date_range.end}); отбор: {selection}; поля: {fields}; время: {args.timezone}; базовый каталог: {base_output_dir} (если он занят, будет создан каталог с суффиксом)")
             return 0
     else:
@@ -85,7 +86,7 @@ def main(argv: list[str] | None = None) -> int:
         windows = build_monitoring_windows()
         if args.dry_run:
             source = windows["backup_3_months"] if args.full_archive else windows["last_week"]
-            base_output_dir = Path(args.output) / source.slug
+            base_output_dir = Path(args.output) / run_dir_name()
             if args.full_archive:
                 archive_line = f"архив [{windows['backup_3_months'].start.isoformat()}, {windows['backup_3_months'].end.isoformat()}); "
             else:

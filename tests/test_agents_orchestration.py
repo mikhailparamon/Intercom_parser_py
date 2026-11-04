@@ -227,7 +227,7 @@ def test_cli_merge_agents(tmp_path, capsys):
     code = main(["merge-agents", "--week", str(week), "--day", str(day)])
     assert code == 0
     assert "Дашборд" in capsys.readouterr().out
-    assert (out / "dashboard.html").is_file()
+    assert list(out.glob("dashboard_*.html"))
 
 
 def test_merge_agents_results_uses_recommendations_file(tmp_path):
@@ -291,7 +291,7 @@ def test_cli_merge_agents_defaults_to_latest_run(tmp_path, monkeypatch, capsys):
 
     assert code == 0
     assert "Дашборд" in capsys.readouterr().out
-    assert (out / "dashboard.html").is_file()
+    assert list(out.glob("dashboard_*.html"))
 
 
 def test_cli_merge_agents_picks_up_agents_work_recommendations(tmp_path, monkeypatch):
@@ -324,12 +324,12 @@ def test_cli_render_dashboard_from_existing_result(tmp_path, monkeypatch):
     _fill_results(manifest, category=None)
     monkeypatch.chdir(tmp_path)
     assert main(["merge-agents"]) == 0
-    (out / "dashboard.html").unlink()
+    next(out.glob("dashboard_*.html")).unlink()
 
     code = main(["render-dashboard", "--dashboard-dir", str(tmp_path / "dash")])
 
     assert code == 0
-    assert (tmp_path / "dash" / "dashboard.html").is_file()
+    assert list((tmp_path / "dash").glob("dashboard_*.html"))
 
 
 def test_cli_research_waits_for_orchestration(tmp_path, monkeypatch, capsys):
@@ -401,6 +401,6 @@ def test_cli_research_merges_and_builds_dashboard(tmp_path, monkeypatch):
     code = main(["research", "--dashboard-dir", str(tmp_path / "dash")])
 
     assert code == 0
-    assert (tmp_path / "dash" / "dashboard.html").is_file()
+    assert list((tmp_path / "dash").glob("dashboard_*.html"))
     result = json.loads((out / "chatgpt_result.json").read_text(encoding="utf-8"))
     assert result["recommendations"] == ["Совет"]
