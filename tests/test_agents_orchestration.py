@@ -230,33 +230,6 @@ def test_cli_merge_agents(tmp_path, capsys):
     assert (out / "dashboard.html").is_file()
 
 
-def test_cli_prepare_monitoring_skips_agents_bundle_when_analyze(tmp_path, monkeypatch):
-    from intercom_exporter import config, openrouter
-    from intercom_exporter.support_analysis import main
-
-    week = _write_conversations(tmp_path / "run" / "last_week", ["a"])
-    day = _write_conversations(tmp_path / "run" / "last_day", ["a"])
-    # Заглушка настроек: реальный load_dahl_settings читает .env проекта и
-    # засоряет os.environ для последующих тестов (load_dotenv без override).
-    monkeypatch.setattr(
-        config, "load_dahl_settings",
-        lambda: config.DahlSettings("dahl-key", config.DEFAULT_DAHL_MODEL, 3),
-    )
-    calls = []
-
-    def fake_run(*args, **kwargs):
-        calls.append((args, kwargs))
-        return {"result_path": "result", "report_path": "report", "classifications_path": "csv"}
-
-    monkeypatch.setattr(openrouter, "run_monitoring_analysis", fake_run)
-
-    code = main(["prepare-monitoring", "--week", str(week), "--day", str(day), "--analyze", "dahl"])
-
-    assert code == 0
-    assert len(calls) == 1
-    assert not (tmp_path / "run" / "support-analysis" / "agents_work").exists()
-
-
 def test_merge_agents_results_uses_recommendations_file(tmp_path):
     week = _write_conversations(tmp_path / "last_week", ["a", "b"])
     day = _write_conversations(tmp_path / "last_day", ["a"])

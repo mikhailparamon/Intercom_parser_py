@@ -6,7 +6,7 @@ import pytest
 
 from intercom_exporter.cli import main
 import intercom_exporter.cli as cli
-from intercom_exporter.config import load_config, load_openrouter_settings
+from intercom_exporter.config import load_config
 
 
 def test_config_reads_token_and_api_version_from_env_file(tmp_path, monkeypatch):
@@ -17,31 +17,6 @@ def test_config_reads_token_and_api_version_from_env_file(tmp_path, monkeypatch)
     config = load_config(env_file)
     assert config.access_token == "fake-token"
     assert config.api_version == "2.17"
-
-
-def test_openrouter_settings_are_optional_and_read_model_override(tmp_path, monkeypatch):
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    monkeypatch.delenv("OPENROUTER_MODEL", raising=False)
-    assert load_openrouter_settings(tmp_path / "missing.env") is None
-    env_file = tmp_path / ".env"
-    env_file.write_text("OPENROUTER_API_KEY=router-key\nOPENROUTER_MODEL=vendor/model\n", encoding="utf-8")
-    settings = load_openrouter_settings(env_file)
-    assert settings.api_key == "router-key"
-    assert settings.model == "vendor/model"
-    assert settings.workers == 3
-
-
-def test_openrouter_workers_can_be_configured_and_must_be_positive(tmp_path, monkeypatch):
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    monkeypatch.delenv("OPENROUTER_WORKERS", raising=False)
-    env_file = tmp_path / ".env"
-    env_file.write_text("OPENROUTER_API_KEY=router-key\nOPENROUTER_WORKERS=5\n", encoding="utf-8")
-    assert load_openrouter_settings(env_file).workers == 5
-
-    env_file.write_text("OPENROUTER_API_KEY=router-key\nOPENROUTER_WORKERS=0\n", encoding="utf-8")
-    monkeypatch.delenv("OPENROUTER_WORKERS", raising=False)
-    with pytest.raises(ValueError, match="OPENROUTER_WORKERS"):
-        load_openrouter_settings(env_file)
 
 
 def test_config_missing_token_has_setup_guidance(tmp_path, monkeypatch):
@@ -121,65 +96,6 @@ def test_cli_prepares_analysis_for_fresh_successful_export(tmp_path, monkeypatch
 
     assert calls == [output_dir / "conversations.json"]
     assert "Подготовка данных для ChatGPT" in capsys.readouterr().out
-
-
-def test_standard_cli_runs_openrouter_after_preparing_inputs_when_key_is_configured(tmp_path, monkeypatch, capsys):
-    from types import SimpleNamespace
-
-    output_dir = tmp_path / "2026-07-01_2026-10-01"
-    calls = []
-
-    class FakeExporter:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def run(self, *args, **kwargs):
-            return {"status": "success", "found_count": 1, "exported_count": 1,
-                    "error_count": 0, "elapsed_seconds": 1, "output_dir": str(output_dir)}
-
-    monkeypatch.setattr(cli, "load_config", lambda: SimpleNamespace(
-        access_token="token", api_version="2.17", openrouter_api_key="router-key", openrouter_model="vendor/model",
-    ))
-    monkeypatch.setattr(cli, "IntercomClient", lambda *args: object())
-    monkeypatch.setattr(cli, "ConversationExporter", FakeExporter)
-    monkeypatch.setattr(cli, "prepare_analysis", lambda path: {
-        "conversation_count": 1, "output_dir": str(output_dir / "support-analysis"),
-    })
-    monkeypatch.setattr(cli, "run_standard_analysis", lambda *args, **kwargs: (
-        calls.append(args) or {"result_path": "result", "report_path": "report", "classifications_path": "csv"}
-    ))
-
-    assert cli.main(["--standard", "--start", "2026-07-01", "--end", "2026-10-01", "--analyze", "openrouter"]) == 0
-    assert calls == [(output_dir / "conversations.json", str(output_dir / "support-analysis"), "router-key", "vendor/model", 3)]
-    assert "Анализ завершён через OpenRouter" in capsys.readouterr().out
-
-
-def test_monitoring_cli_runs_one_openrouter_analysis_for_week_and_day(tmp_path, monkeypatch, capsys):
-    from types import SimpleNamespace
-
-    week_dir, day_dir, analysis_dir = tmp_path / "last_week", tmp_path / "last_day", tmp_path / "support-analysis"
-    calls = []
-    monkeypatch.setattr(cli, "load_config", lambda: SimpleNamespace(
-        access_token="token", api_version="2.17", openrouter_api_key="router-key", openrouter_model="vendor/model",
-    ))
-    monkeypatch.setattr(cli, "IntercomClient", lambda *args: object())
-    monkeypatch.setattr(cli, "ConversationExporter", lambda *args, **kwargs: object())
-    monkeypatch.setattr(cli, "run_monitoring", lambda *args, **kwargs: {
-        "export": {"status": "success", "found_count": 1, "exported_count": 1, "error_count": 0, "elapsed_seconds": 1},
-        "snapshots": {
-            "last_week": {"conversation_count": 1, "output_dir": str(week_dir)},
-            "last_day": {"conversation_count": 1, "output_dir": str(day_dir)},
-        },
-        "analysis": {"output_dir": str(analysis_dir)},
-    })
-    monkeypatch.setattr(cli, "run_monitoring_analysis", lambda *args, **kwargs: (
-        calls.append(args) or {"result_path": "result", "report_path": "report", "classifications_path": "csv"}
-    ))
-
-    assert cli.main(["--analyze", "openrouter"]) == 0
-
-    assert calls == [(week_dir / "conversations.json", day_dir / "conversations.json", str(analysis_dir), "router-key", "vendor/model", 3)]
-    assert "Анализ завершён через OpenRouter" in capsys.readouterr().out
 
 
 def test_cli_analyzes_exported_rows_from_partial_export_and_allows_opt_out(tmp_path, monkeypatch, capsys):
@@ -332,106 +248,6 @@ def test_cli_monitoring_rejects_standard_only_selection_and_fields():
     with pytest.raises(SystemExit) as fields_error:
         cli.main(["--dry-run", "--fields", "important"])
     assert fields_error.value.code == 2
-
-
-def test_cli_without_analyze_flag_skips_auto_analysis_even_with_key(tmp_path, monkeypatch, capsys):
-    from types import SimpleNamespace
-    calls = []
-    monkeypatch.setattr(cli, "load_config", lambda: SimpleNamespace(
-        access_token="token", api_version="2.17", openrouter_api_key="router-key", openrouter_model="m",
-    ))
-    monkeypatch.setattr(cli, "IntercomClient", lambda *args: object())
-    monkeypatch.setattr(cli, "ConversationExporter", lambda *args, **kwargs: object())
-    monkeypatch.setattr(cli, "run_monitoring", lambda *args, **kwargs: {
-        "export": {"status": "success", "found_count": 1, "exported_count": 1, "error_count": 0, "elapsed_seconds": 1},
-        "snapshots": {
-            "last_week": {"conversation_count": 1, "output_dir": str(tmp_path / "week")},
-            "last_day": {"conversation_count": 1, "output_dir": str(tmp_path / "day")},
-        },
-        "analysis": {"output_dir": str(tmp_path / "support-analysis")},
-    })
-    monkeypatch.setattr(cli, "run_monitoring_analysis", lambda *args, **kwargs: calls.append(args))
-
-    assert cli.main([]) == 0
-    assert calls == []
-    assert "ручного анализа" in capsys.readouterr().out
-
-
-def test_cli_analyze_dahl_uses_dahl_settings(tmp_path, monkeypatch, capsys):
-    from types import SimpleNamespace
-    from intercom_exporter.openrouter import DAHL_URL
-    calls = []
-    monkeypatch.setattr(cli, "load_config", lambda: SimpleNamespace(
-        access_token="token", api_version="2.17",
-        dahl_api_key="dahl-key", dahl_model="MiniMaxAI/MiniMax-M2.7", dahl_workers=2,
-    ))
-    monkeypatch.setattr(cli, "IntercomClient", lambda *args: object())
-    monkeypatch.setattr(cli, "ConversationExporter", lambda *args, **kwargs: object())
-    monkeypatch.setattr(cli, "run_monitoring", lambda *args, **kwargs: {
-        "export": {"status": "success", "found_count": 1, "exported_count": 1, "error_count": 0, "elapsed_seconds": 1},
-        "snapshots": {
-            "last_week": {"conversation_count": 1, "output_dir": str(tmp_path / "week")},
-            "last_day": {"conversation_count": 1, "output_dir": str(tmp_path / "day")},
-        },
-        "analysis": {"output_dir": str(tmp_path / "support-analysis")},
-    })
-    monkeypatch.setattr(cli, "run_monitoring_analysis", lambda *args, **kwargs: (
-        calls.append((args, kwargs)) or {"result_path": "r", "report_path": "rep", "classifications_path": "csv"}
-    ))
-
-    assert cli.main(["--analyze", "dahl"]) == 0
-    positional, keyword = calls[0]
-    assert positional[3] == "dahl-key"
-    assert positional[4] == "MiniMaxAI/MiniMax-M2.7"
-    assert positional[5] == 2
-    assert keyword["base_url"] == DAHL_URL
-    assert keyword["provider_label"] == "Dahl"
-    assert "Dahl" in capsys.readouterr().out
-
-
-def test_cli_analyze_without_provider_key_is_rejected(tmp_path, monkeypatch, capsys):
-    from types import SimpleNamespace
-    monkeypatch.setattr(cli, "load_config", lambda: SimpleNamespace(
-        access_token="token", api_version="2.17",
-    ))
-    monkeypatch.setattr(cli, "IntercomClient", lambda *args: object())
-    monkeypatch.setattr(cli, "ConversationExporter", lambda *args, **kwargs: object())
-    monkeypatch.setattr(cli, "run_monitoring", lambda *args, **kwargs: {
-        "export": {"status": "success", "found_count": 1, "exported_count": 1, "error_count": 0, "elapsed_seconds": 1},
-        "snapshots": {
-            "last_week": {"conversation_count": 1, "output_dir": str(tmp_path / "week")},
-            "last_day": {"conversation_count": 1, "output_dir": str(tmp_path / "day")},
-        },
-        "analysis": {"output_dir": str(tmp_path / "support-analysis")},
-    })
-
-    with pytest.raises(SystemExit) as error:
-        cli.main(["--analyze", "dahl"])
-    assert error.value.code == 2
-    assert "DAHL_API_KEY" in capsys.readouterr().err
-
-
-def test_cli_skip_analysis_beats_analyze_flag(tmp_path, monkeypatch, capsys):
-    from types import SimpleNamespace
-    calls = []
-    monkeypatch.setattr(cli, "load_config", lambda: SimpleNamespace(
-        access_token="token", api_version="2.17",
-    ))
-    monkeypatch.setattr(cli, "IntercomClient", lambda *args: object())
-    monkeypatch.setattr(cli, "ConversationExporter", lambda *args, **kwargs: object())
-    monkeypatch.setattr(cli, "run_monitoring", lambda *args, **kwargs: (
-        calls.append(kwargs) or {
-            "export": {"status": "success", "found_count": 0, "exported_count": 0, "error_count": 0, "elapsed_seconds": 0},
-            "snapshots": {
-                "last_week": {"conversation_count": 0, "output_dir": str(tmp_path / "week")},
-                "last_day": {"conversation_count": 0, "output_dir": str(tmp_path / "day")},
-            },
-            "analysis": None,
-        }
-    ))
-
-    assert cli.main(["--skip-analysis", "--analyze", "dahl"]) == 0
-    assert calls[0]["prepare"] is None
 
 
 def test_agent_workers_defaults_and_env(monkeypatch, tmp_path):

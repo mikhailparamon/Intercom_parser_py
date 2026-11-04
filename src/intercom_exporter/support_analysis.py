@@ -736,8 +736,6 @@ def build_parser() -> argparse.ArgumentParser:
     prepare = subparsers.add_parser("prepare", help="Очистить и подготовить набор для ChatGPT")
     prepare.add_argument("--input", required=True, help="Исходный conversations.json или conversations.jsonl")
     prepare.add_argument("--output", help="Каталог анализа (по умолчанию: support-analysis рядом с входным файлом)")
-    prepare.add_argument("--analyze", choices=("openrouter", "dahl"),
-                         help="Автоматический AI-анализ через выбранный провайдер (без флага — только подготовка файлов для ручного анализа)")
     report = subparsers.add_parser("report", help="Проверить классификации ChatGPT и построить отчёт")
     report.add_argument("--input", required=True, help="Исходный conversations.json или conversations.jsonl")
     report.add_argument("--result", required=True, help="JSON-результат ChatGPT")
@@ -746,8 +744,6 @@ def build_parser() -> argparse.ArgumentParser:
     monitor_prepare.add_argument("--week", required=True, help="Недельный conversations.json")
     monitor_prepare.add_argument("--day", required=True, help="Дневной conversations.json")
     monitor_prepare.add_argument("--output", help="Общий каталог с двумя входными файлами и PROMPT.md")
-    monitor_prepare.add_argument("--analyze", choices=("openrouter", "dahl"),
-                                 help="Автоматический AI-анализ через выбранный провайдер (без флага — только подготовка файлов для ручного анализа)")
     monitor_prepare.add_argument("--workers", type=int,
                                  help="Число параллельных субагентов для пакета оркестрации (2–20; по умолчанию: AGENT_WORKERS из .env или 10)")
     monitor_prepare.add_argument("--no-agents", action="store_true",
@@ -814,30 +810,6 @@ def _maybe_notify_slack(args: argparse.Namespace, result: dict) -> None:
     print(f"Дашборд отправлен в Slack (канал {settings.channel_id}), file_id: {file_id}")
 
 
-def _analysis_kwargs(args, parser) -> dict[str, Any] | None:
-    """Настройки автоанализа или None, если анализ не запрошен."""
-    if not args.analyze:
-        return None
-    from . import config
-    from .openrouter import DAHL_URL, OPENROUTER_LABEL, OPENROUTER_URL
-
-    if args.analyze == "openrouter":
-        settings = config.load_openrouter_settings()
-        base_url, label, missing = OPENROUTER_URL, OPENROUTER_LABEL, "OPENROUTER_API_KEY"
-    else:
-        settings = config.load_dahl_settings()
-        base_url, label, missing = DAHL_URL, "Dahl", "DAHL_API_KEY"
-    if settings is None:
-        parser.error(f"--analyze {args.analyze}: не задан {missing} в .env")
-    return {
-        "api_key": settings.api_key,
-        "model": settings.model,
-        "workers": settings.workers,
-        "base_url": base_url,
-        "provider_label": label,
-    }
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -846,18 +818,7 @@ def main(argv: list[str] | None = None) -> int:
             result = prepare_analysis(args.input, args.output)
             size_mb = result["input_file_bytes"] / (1024 * 1024)
             print(f"Подготовлено обращений: {result['conversation_count']}; сообщений: {result['message_count']}; размер JSON: {size_mb:.1f} МБ. Файлы для ChatGPT: {result['output_dir']}")
-            analysis = _analysis_kwargs(args, parser)
-            if analysis:
-                from .openrouter import run_standard_analysis
-
-                print(f"Выполняется анализ через {analysis['provider_label']} ({analysis['model']})...")
-                ai_result = run_standard_analysis(args.input, result["output_dir"], **analysis)
-                print(
-                    f"Анализ завершён. Результат: {ai_result['result_path']}; "
-                    f"отчёт: {ai_result['report_path']}; CSV: {ai_result['classifications_path']}"
-                )
-            else:
-                print("Автоматический анализ отключён (включить: --analyze openrouter|dahl); входной JSON и PROMPT.md готовы для ручного анализа.")
+            print("Входной JSON и PROMPT.md готовы для ручного анализа.")
         elif args.command == "report":
             result = generate_report(args.input, args.result, args.output)
             print(f"Отчёт сохранён: {result['report_path']}. Разметка: {result['classifications_path']}")
@@ -868,7 +829,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"({result['day_conversation_count']}), уникальных ID: {result['unique_conversation_count']}. "
                 f"Один PROMPT.md и оба входных JSON: {result['output_dir']}"
             )
-            if not args.no_agents and not args.analyze:
+            if not args.no_agents:
                 from .agents_orchestration import prepare_agents_bundle
 
                 bundle = prepare_agents_bundle(args.week, args.day, result["output_dir"],
@@ -878,18 +839,7 @@ def main(argv: list[str] | None = None) -> int:
                     f"таксономия: {bundle['taxonomy_source']}. Манифест: {bundle['work_dir']}/manifest.json. "
                     "Запустите субагентов по протоколу agents_protocol.md, затем: merge-agents --week ... --day ..."
                 )
-            analysis = _analysis_kwargs(args, parser)
-            if analysis:
-                from .openrouter import run_monitoring_analysis
-
-                print(f"Выполняется анализ через {analysis['provider_label']} ({analysis['model']})...")
-                ai_result = run_monitoring_analysis(args.week, args.day, result["output_dir"], **analysis)
-                print(
-                    f"Анализ завершён. Результат: {ai_result['result_path']}; "
-                    f"отчёт: {ai_result['report_path']}; CSV: {ai_result['classifications_path']}"
-                )
-            else:
-                print("Автоматический анализ отключён (включить: --analyze openrouter|dahl); JSON-файлы и PROMPT.md готовы для ручного анализа.")
+            print("JSON-файлы и PROMPT.md готовы для ручного анализа.")
         elif args.command == "merge-agents":
             from .agents_orchestration import merge_agents_results
 

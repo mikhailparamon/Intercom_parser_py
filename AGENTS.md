@@ -4,7 +4,7 @@
 
 ## О проекте
 
-CLI-приложение на Python для выгрузки обращений Intercom с историей переписки в форматированный JSON и подготовки отчёта по поддержке через OpenRouter API (или вручную через ChatGPT).
+CLI-приложение на Python для выгрузки обращений Intercom с историей переписки в форматированный JSON и подготовки отчёта по поддержке вручную через ChatGPT или оркестрацией субагентов.
 
 - Язык интерфейса и документации: русский.
 - Платформа разработки: Windows (Git Bash / PowerShell). Пути в командах — Windows-стиль.
@@ -12,7 +12,7 @@ CLI-приложение на Python для выгрузки обращений 
 ## Стек
 
 - Python 3.11+
-- `requests` — HTTP к Intercom API и OpenRouter
+- `requests` — HTTP к Intercom API
 - `python-dotenv` — конфигурация через `.env`
 - `tzdata` — часовые пояса
 - `pytest` — тесты
@@ -29,7 +29,7 @@ src/intercom_exporter/
   dates.py                   # работа с датами/периодами
   exporter.py                # выгрузка обращений в JSON
   monitoring.py              # мониторинг
-  openrouter.py              # клиент OpenRouter API
+  notify_slack.py            # отправка дашборда в Slack
   storage.py                 # сохранение результатов
   support_analysis.py        # отчёт по поддержке
   support_analysis_prompt_template.md  # шаблон промпта отчёта
@@ -61,7 +61,7 @@ python -m pytest tests/test_config_cli.py -k имя_теста
 
 ## Конфигурация и секреты
 
-- Конфигурация — через `.env` (шаблон: `.env.example`). Переменные: `INTERCOM_ACCESS_TOKEN`, `INTERCOM_API_VERSION`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `OPENROUTER_WORKERS`.
+- Конфигурация — через `.env` (шаблон: `.env.example`). Переменные: `INTERCOM_ACCESS_TOKEN`, `INTERCOM_API_VERSION`, `AGENT_WORKERS`, `SLACK_BOT_TOKEN`, `SLACK_CHANNEL_ID`.
 - **Никогда не читать и не выводить `.env`.** Только `.env.example`.
 - `data/` содержит реальные выгрузки переписок — не коммитить, не отправлять наружу.
 
