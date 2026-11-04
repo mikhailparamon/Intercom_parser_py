@@ -25,6 +25,15 @@ def test_config_missing_token_has_setup_guidance(tmp_path, monkeypatch):
         load_config(tmp_path / "missing.env")
 
 
+def test_config_reads_service_token(tmp_path, monkeypatch):
+    monkeypatch.delenv("INTERCOM_ACCESS_TOKEN", raising=False)
+    monkeypatch.delenv("HYPERTUBE_INTERCOM_ACCESS_TOKEN", raising=False)
+    env_file = tmp_path / ".env"
+    env_file.write_text("HYPERTUBE_INTERCOM_ACCESS_TOKEN=hyper-token\nINTERCOM_API_VERSION=2.17\n", encoding="utf-8")
+    config = load_config(env_file, service_id="hypertube")
+    assert config.access_token == "hyper-token"
+
+
 def test_dry_run_needs_no_token_and_makes_no_api_calls(capsys):
     assert main(["--standard", "--dry-run", "--start", "2026-07-01", "--end", "2026-10-01", "--workers", "6"]) == 0
     output = capsys.readouterr().out
@@ -190,13 +199,14 @@ def test_cli_dry_run_with_full_archive_shows_archive_window(monkeypatch, capsys)
 
 def test_cli_monitoring_passes_full_archive_flag(tmp_path, monkeypatch, capsys):
     from types import SimpleNamespace
-    captured = {}
-    monkeypatch.setattr(cli, "load_config", lambda: SimpleNamespace(access_token="token", api_version="2.17"))
+    calls = []
+    monkeypatch.setattr(cli, "load_config",
+                        lambda service_id=None: SimpleNamespace(access_token="token", api_version="2.17"))
     monkeypatch.setattr(cli, "IntercomClient", lambda *args: object())
     monkeypatch.setattr(cli, "ConversationExporter", lambda *args, **kwargs: object())
 
     def fake_run_monitoring(*args, **kwargs):
-        captured.update(kwargs)
+        calls.append(kwargs)
         return {
             "export": {"status": "success", "found_count": 0, "exported_count": 0, "error_count": 0, "elapsed_seconds": 0},
             "snapshots": {
@@ -210,7 +220,8 @@ def test_cli_monitoring_passes_full_archive_flag(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli, "run_monitoring", fake_run_monitoring)
 
     assert cli.main(["--full-archive", "--skip-analysis"]) == 0
-    assert captured["full_archive"] is True
+    assert len(calls) == 2
+    assert all(call["full_archive"] is True for call in calls)
     output = capsys.readouterr().out
     assert "Архив за 3 месяца" in output
 

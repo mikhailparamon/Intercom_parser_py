@@ -8,6 +8,7 @@ from .config import load_agent_workers, load_config
 from .dates import default_range, parse_date_range, run_dir_name, DateRange
 from .exporter import ConversationExporter, format_duration, resolve_timezone
 from .monitoring import build_monitoring_windows, run_monitoring
+from .services import DEFAULT_SERVICE_ID, get_service, iter_services
 from .support_analysis import AnalysisError, prepare_analysis, prepare_monitoring_analysis
 
 
@@ -53,6 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Мониторинг: не создавать пакет оркестрации субагентов после выгрузки")
     parser.add_argument("--agent-workers", type=int,
                         help="Число чанков субагентов в пакете оркестрации (2–20; по умолчанию: AGENT_WORKERS из .env или 10)")
+    parser.add_argument("--service", help="Обработать только один сервис (vpn или hypertube); по умолчанию обрабатываются все")
     parser.add_argument("--verbose", action="store_true", help="Подробное логирование без содержимого переписок")
     return parser
 
@@ -64,6 +66,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.standard:
         if args.full_archive:
             parser.error("Параметр --full-archive доступен только в режиме мониторинга")
+        if args.service:
+            parser.error("Параметр --service доступен только в режиме мониторинга")
         try:
             if args.start is None and args.end is None:
                 date_range = default_range()
@@ -84,6 +88,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.selection is not None or args.fields is not None:
             parser.error("Параметры --selection и --fields доступны с --standard; мониторинг всегда использует all")
         windows = build_monitoring_windows()
+        services = [get_service(args.service)] if args.service else list(iter_services())
         if args.dry_run:
             source = windows["backup_3_months"] if args.full_archive else windows["last_week"]
             base_output_dir = Path(args.output) / run_dir_name()
@@ -91,13 +96,67 @@ def main(argv: list[str] | None = None) -> int:
                 archive_line = f"архив [{windows['backup_3_months'].start.isoformat()}, {windows['backup_3_months'].end.isoformat()}); "
             else:
                 archive_line = "архив выключен (включить: --full-archive); "
+            service_line = f"сервисы: {', '.join(s.label for s in services)}; "
             print(
-                "Мониторинг UTC: " + archive_line +
+                "Мониторинг UTC: " + archive_line + service_line +
                 f"неделя [{windows['last_week'].start.isoformat()}, {windows['last_week'].end.isoformat()}); "
                 f"день [{windows['last_day'].start.isoformat()}, {windows['last_day'].end.isoformat()}); "
-                f"поля: all; базовый каталог: {base_output_dir} (при повторном запуске будет создан новый каталог)"
+                f"поля: all; базовый каталог: {base_output_dir} (при повторном запуске будет создан новый каталог); "
+                f"раскладка: <базовый каталог>/<сервис>/..."
             )
             return 0
+    if not args.standard:
+        any_failed = False
+        for service in services:
+            try:
+                service_config = load_config(service_id=service.id)
+            except ValueError as exc:
+                print(f"{service.label}: {exc}")
+                any_failed = True
+                continue
+            service_exporter = ConversationExporter(
+                IntercomClient(service_config.access_token, service_config.api_version),
+                max_workers=args.workers,
+            )
+            service_output = Path(args.output) / service.id
+            try:
+                result = run_monitoring(
+                    service_exporter, service_output, full_archive=args.full_archive, windows=windows,
+                    api_version=service_config.api_version, timezone_name=args.timezone,
+                    prepare=None if args.skip_analysis else prepare_monitoring_analysis,
+                    agents=not args.no_agents,
+                    agent_workers=args.agent_workers if args.agent_workers is not None else load_agent_workers(),
+                    service_id=service.id,
+                )
+            except (IntercomAPIError, AnalysisError, ValueError) as exc:
+                logging.error("%s: мониторинг не выполнен: %s", service.label, exc)
+                any_failed = True
+                continue
+            export_result = result["export"]
+            print(
+                f"{service.label}: экспорт завершён ({export_result['status']}). "
+                f"Найдено: {export_result['found_count']}, успешно обработано: "
+                f"{export_result['exported_count']}, ошибок: {export_result['error_count']}. "
+                f"Время: {format_duration(export_result['elapsed_seconds'])}."
+            )
+            labels = [("last_week", "Срез за неделю"), ("last_day", "Срез за день")]
+            if args.full_archive:
+                labels.insert(0, ("backup_3_months", "Архив за 3 месяца"))
+            for name, label in labels:
+                snapshot = result["snapshots"][name]
+                print(f"  {label}: {snapshot['conversation_count']} обращений. Каталог: {snapshot['output_dir']}")
+            if result["analysis"]:
+                print(f"  Общие файлы для анализа: {result['analysis']['output_dir']}")
+                if result["analysis"].get("agents_bundle"):
+                    bundle = result["analysis"]["agents_bundle"]
+                    print(
+                        f"    Пакет оркестрации готов: {bundle['workers']} чанков, "
+                        f"таксономия: {bundle['taxonomy_source']}. Манифест: {bundle['work_dir']}/manifest.json."
+                    )
+            elif args.skip_analysis:
+                print("  Подготовка данных для ChatGPT отключена параметром --skip-analysis.")
+        return 1 if any_failed else 0
+
     try:
         config = load_config()
     except ValueError as exc:
@@ -105,44 +164,6 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     client = IntercomClient(config.access_token, config.api_version)
     exporter = ConversationExporter(client, max_workers=args.workers)
-    if not args.standard:
-        try:
-            result = run_monitoring(
-                exporter, args.output, full_archive=args.full_archive, windows=windows, api_version=config.api_version,
-                timezone_name=args.timezone,
-                prepare=None if args.skip_analysis else prepare_monitoring_analysis,
-                agents=not args.no_agents,
-                agent_workers=args.agent_workers if args.agent_workers is not None else load_agent_workers(),
-            )
-        except (IntercomAPIError, AnalysisError, ValueError) as exc:
-            logging.error("Мониторинг не выполнен: %s", exc)
-            return 1
-        export_result = result["export"]
-        print(
-            f"Экспорт завершён: {export_result['status']}. "
-            f"Найдено: {export_result['found_count']}, успешно обработано: "
-            f"{export_result['exported_count']}, ошибок: {export_result['error_count']}. "
-            f"Время: {format_duration(export_result['elapsed_seconds'])}."
-        )
-        labels = [("last_week", "Срез за неделю"), ("last_day", "Срез за день")]
-        if args.full_archive:
-            labels.insert(0, ("backup_3_months", "Архив за 3 месяца"))
-        for name, label in labels:
-            snapshot = result["snapshots"][name]
-            print(f"{label}: {snapshot['conversation_count']} обращений. Каталог: {snapshot['output_dir']}")
-        if result["analysis"]:
-            print(f"Общие файлы для анализа обоих периодов: {result['analysis']['output_dir']}")
-            if result["analysis"].get("agents_bundle"):
-                bundle = result["analysis"]["agents_bundle"]
-                print(
-                    f"Пакет оркестрации субагентов готов: {bundle['workers']} чанков, "
-                    f"таксономия: {bundle['taxonomy_source']}. Манифест: {bundle['work_dir']}/manifest.json."
-                )
-            print("Подготовлены файлы для ручного анализа в ChatGPT.")
-        if args.skip_analysis:
-            print("Подготовка данных для ChatGPT отключена параметром --skip-analysis.")
-        return 0 if export_result["status"] == "success" else 1
-
     try:
         result = exporter.run(
             date_range, args.output, api_version=config.api_version,

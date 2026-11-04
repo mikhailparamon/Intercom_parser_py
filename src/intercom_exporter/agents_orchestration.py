@@ -57,14 +57,60 @@ TAXONOMY = [
 BILLING_CATEGORY = "Оплата и управление подпиской"
 assert any(item["name"] == BILLING_CATEGORY for item in TAXONOMY), "BILLING_CATEGORY должна быть в TAXONOMY"
 
+# Фиксированная таксономия HyperTube v1 — синхронизирована с разделом 3 шаблона
+# support_analysis_prompt_template_hypertube.md. Менять только вместе с шаблоном.
+HYPERTUBE_TAXONOMY = [
+    {"name": "Доступ к YouTube",
+     "description": "YouTube не открывается, пишет «нет интернета», сайт недоступен, видео не загружаются; пользователь не указывает приложение/расширение или проблема явно на стороне доступа к YouTube."},
+    {"name": "Приложение HyperTube",
+     "description": "Проблемы с мобильным или TV приложением HyperTube: не запускается, не подключается, вылетает, переустановка, кэш."},
+    {"name": "Расширение браузера",
+     "description": "Проблемы с браузерным расширением HyperTube: не работает в Chrome/Yandex/Opera/Edge, не устанавливается, иконка неактивна, чистка кэша браузера."},
+    {"name": "Скорость и качество видео",
+     "description": "YouTube тормозит, лагает, медленная загрузка, низкое разрешение, постоянная буферизация."},
+    {"name": "Оплата и подписка",
+     "description": "Вопросы оплаты Premium, продления, пробного периода, активации подписки после оплаты, возврата средств."},
+    {"name": "Авторизация и аккаунт",
+     "description": "Код входа не приходит или истекает, вход в аккаунт, привязка устройства, сброс настроек после переустановки системы."},
+    {"name": "Смена сервера и регион",
+     "description": "Переключение сервера/региона, смена сервера не помогает, подбор оптимального сервера."},
+    {"name": "Прочие обращения",
+     "description": "Системные уведомления, пустые сообщения, /start, спам, предложения, сообщения не по теме сервиса."},
+]
+HYPERTUBE_BILLING_CATEGORY = "Оплата и подписка"
+
+
+def get_taxonomy(service_id: str | None = None) -> list[dict]:
+    """Таксономия категорий для сервиса."""
+    if service_id == "hypertube":
+        return list(HYPERTUBE_TAXONOMY)
+    return list(TAXONOMY)
+
+
+def get_billing_category(service_id: str | None = None) -> str:
+    if service_id == "hypertube":
+        return HYPERTUBE_BILLING_CATEGORY
+    return BILLING_CATEGORY
+
 
 def prepare_agents_bundle(
     week_input_path: str | Path,
     day_input_path: str | Path,
     output_dir: str | Path,
     workers: int = DEFAULT_WORKERS,
+    taxonomy: list[dict] | None = None,
+    taxonomy_source: str = "static_v5",
+    service_id: str | None = None,
 ) -> dict[str, Any]:
-    """Режет объединение week+day на чанки и готовит манифест оркестрации."""
+    """Режет объединение week+day на чанки и готовит манифест оркестрации.
+
+    Пустая таксономия считается признаком «ещё не утверждена» и приводит к ошибке,
+    чтобы случайно не запустить классификацию без категорий.
+    """
+    if taxonomy is None:
+        taxonomy = get_taxonomy(service_id)
+    if not taxonomy:
+        raise AnalysisError("Таксономия сервиса не задана. Сначала утвердите список категорий.")
     if not 2 <= workers <= 20:
         raise AnalysisError("workers должен быть от 2 до 20")
     output = Path(output_dir)
@@ -81,7 +127,7 @@ def prepare_agents_bundle(
         shutil.rmtree(work)
     work.mkdir(parents=True)
 
-    _write_json(work / "taxonomy.json", {"categories": TAXONOMY})
+    _write_json(work / "taxonomy.json", {"categories": taxonomy})
 
     chunks = [conversations[i::workers] for i in range(workers)]
     chunk_entries = []
@@ -107,13 +153,14 @@ def prepare_agents_bundle(
         day_bytes = day_file.stat().st_size if day_file.is_file() else 0
         _write_text(prompt_file, _monitoring_prompt(
             week_payload, day_payload, combined_payload, week_bytes, day_bytes,
+            service_id=service_id,
         ))
 
     protocol_template = Path(__file__).with_name("agents_protocol.md").read_text(encoding="utf-8")
     manifest = {
         "workers": workers,
         "unique_conversation_count": len(conversations),
-        "taxonomy_source": "static_v5",
+        "taxonomy_source": taxonomy_source,
         "taxonomy_path": str(work / "taxonomy.json"),
         "prompt_path": str(output / "PROMPT.md"),
         "work_dir": str(work),
@@ -185,7 +232,12 @@ def merge_agents_results(
     compare_with: str | Path | None = None,
     recommendations: str | Path | list[str] | None = None,
     dashboard_dir: str | Path | None = None,
+    taxonomy: list[dict] | None = None,
+    taxonomy_source: str = "static_v5",
+    billing_category: str | None = None,
 ) -> dict[str, Any]:
+    taxonomy = taxonomy or TAXONOMY
+    billing_category = billing_category or BILLING_CATEGORY
     """Валидирует result_XX.json субагентов, собирает chatgpt_result.json и строит отчёт+дашборд.
 
     Рекомендации — общие для отчёта: либо список строк, либо путь к JSON-файлу
@@ -207,7 +259,7 @@ def merge_agents_results(
     union_payload = _build_payload(union_rows)
     union_ids = [item["id"] for item in union_payload["conversations"]]
     union_id_set = set(union_ids)
-    category_names = {item["name"] for item in TAXONOMY}
+    category_names = {item["name"] for item in taxonomy}
 
     merged: dict[str, dict] = {}
     errors: list[str] = []
@@ -262,7 +314,8 @@ def merge_agents_results(
         "complete": True,
         "conversation_count": len(classifications),
         "dataset_fingerprint": union_payload["dataset_fingerprint"],
-        "categories": TAXONOMY,
+        "categories": taxonomy,
+        "taxonomy_source": taxonomy_source,
         "classifications": classifications,
         "executive_summary": summary("Объединение", set(union_ids)),
         "recommendations": loaded_recommendations or _default_recommendations(classifications),
@@ -285,7 +338,8 @@ def merge_agents_results(
     _write_json(result_path, result)
 
     report = generate_monitoring_report(week_input_path, day_input_path, result_path, output,
-                                        dashboard_dir=dashboard_dir)
+                                        dashboard_dir=dashboard_dir,
+                                        billing_category=billing_category)
     outcome: dict[str, Any] = {
         "unique_conversation_count": len(classifications),
         "result_path": str(result_path),

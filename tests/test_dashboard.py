@@ -1,6 +1,6 @@
 import json
 
-from intercom_exporter.dashboard import build_dashboard_data, render_dashboard_html, write_dashboard
+from intercom_exporter.dashboard import build_dashboard_data, render_dashboard_html, write_combined_dashboard, write_dashboard
 from intercom_exporter.support_analysis import _build_payload, generate_monitoring_report
 
 CATEGORIES = [
@@ -143,6 +143,23 @@ def test_write_dashboard_writes_data_json_next_to_html(tmp_path):
     json_path = path.with_suffix(".json")
     assert json_path.is_file()
     assert json.loads(json_path.read_text(encoding="utf-8"))["kpis"]["week_total"] == 3
+
+
+def test_write_combined_dashboard_creates_html_with_iframes_and_json(tmp_path):
+    data = build_dashboard_data(_week_rows(), _day_rows(), CATEGORIES, _classifications(), "w", "d")
+    single_path = write_dashboard(data, tmp_path / "vpn")
+    services_data = {"vpn": data}
+    services_html = {"vpn": single_path.read_text(encoding="utf-8")}
+
+    path = write_combined_dashboard(services_data, services_html, tmp_path)
+
+    assert path.name.startswith("dashboard_") and path.name.endswith(".html")
+    html = path.read_text(encoding="utf-8")
+    assert "VPNНаоборот" in html
+    assert "data:text/html;base64," in html
+    json_path = path.with_suffix(".json")
+    assert json_path.is_file()
+    assert json.loads(json_path.read_text(encoding="utf-8"))["vpn"]["kpis"]["week_total"] == 3
 
 
 def test_render_dashboard_html_escapes_script_closing_tag():

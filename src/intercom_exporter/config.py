@@ -4,6 +4,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from .services import get_service
+
 
 DEFAULT_AGENT_WORKERS = 10
 
@@ -73,12 +75,15 @@ class Config:
     api_version: str
 
 
-def load_config(env_file: str | Path | None = None) -> Config:
+def load_config(env_file: str | Path | None = None, service_id: str | None = None) -> Config:
     load_dotenv(dotenv_path=env_file, override=False)
-    token = os.getenv("INTERCOM_ACCESS_TOKEN", "").strip()
+    service = get_service(service_id)
+    token = os.getenv(service.token_env, "").strip()
+    if not token and env_file is not None:
+        token = _read_env_value(Path(env_file), service.token_env)
     version = os.getenv("INTERCOM_API_VERSION", "2.17").strip()
     if not token:
-        raise ValueError("Не задан INTERCOM_ACCESS_TOKEN. Скопируйте .env.example в .env и заполните токен Intercom.")
+        raise ValueError(f"Не задан {service.token_env}. Скопируйте .env.example в .env и заполните токен для сервиса {service.label}.")
     if not version:
         raise ValueError("Не задан INTERCOM_API_VERSION. Укажите версию API в файле .env.")
     return Config(token, version)

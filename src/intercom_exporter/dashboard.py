@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
@@ -9,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .agents_orchestration import BILLING_CATEGORY
+from .services import SERVICES
 from .support_analysis import _write_text
 
 PALETTE = [
@@ -79,6 +81,7 @@ def build_dashboard_data(
     week_period: str,
     day_period: str,
     recommendations: dict | None = None,
+    billing_category: str | None = None,
 ) -> dict:
     """Собирает все агрегаты дашборда из провалидированных данных report-monitoring.
 
@@ -114,7 +117,7 @@ def build_dashboard_data(
     top = week_categories[0] if week_categories else {"name": "—", "count": 0, "share": 0.0}
     billing_week = sum(
         entry["count"] for entry in week_categories
-        if entry["name"] == BILLING_CATEGORY
+        if entry["name"] == (billing_category or BILLING_CATEGORY)
     )
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -352,4 +355,79 @@ def write_dashboard(data: dict, output_dir: str | Path) -> Path:
     _write_text(output_path, render_dashboard_html(data))
     _write_text(output_path.with_suffix(".json"),
                 json.dumps(data, ensure_ascii=False, indent=2))
+    return output_path
+
+
+_COMBINED_TEMPLATE = """<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Мониторинг обращений — VPNНаоборот и HyperTube</title>
+<style>
+:root{--teal:#087f82;--bg:#f3f7f8;--text:#1d2b33;--muted:#6b7f88;--border:#e3ecef}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--text);padding:16px}
+.wrap{max-width:1200px;margin:0 auto}
+header{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+h1{font-size:22px}
+.tabs{display:flex;gap:8px;margin-bottom:12px;border-bottom:1px solid var(--border);padding-bottom:8px}
+.tab{background:#fff;border:1px solid var(--border);border-radius:8px;padding:8px 16px;cursor:pointer;font-size:14px}
+.tab.active{background:var(--teal);color:#fff;border-color:var(--teal)}
+.tab-content{display:none;width:100%;height:calc(100vh - 130px);border:none;border-radius:12px;background:#fff;border:1px solid var(--border)}
+.tab-content.active{display:block}
+footer{margin-top:12px;color:var(--muted);font-size:12px;text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><h1>Мониторинг обращений поддержки</h1></header>
+  <div class="tabs" id="tabs">__TABS__</div>
+  __IFRAMES__
+  <footer>Сгенерировано __GENERATED_AT__ UTC</footer>
+</div>
+<script>
+function switchTab(id){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.tab===id));
+  document.querySelectorAll('.tab-content').forEach(c=>c.classList.toggle('active', c.id===id));
+}
+document.getElementById('tabs').addEventListener('click', e=>{
+  const tab = e.target.closest('.tab'); if(tab) switchTab(tab.dataset.tab);
+});
+</script>
+</body>
+</html>
+"""
+
+
+def write_combined_dashboard(
+    services_data: dict[str, dict],
+    services_html: dict[str, str],
+    output_dir: str | Path,
+) -> Path:
+    """Собирает общий дашборд с вкладками из HTML каждого сервиса.
+
+    Каждый сервисный дашборд встраивается через iframe с data-URL (base64),
+    чтобы избежать конфликтов id и скриптов между вкладками.
+    """
+    stamp = datetime.now(timezone.utc).strftime("%d_%m_%Y")
+    output_path = Path(output_dir) / f"dashboard_{stamp}.html"
+    tabs = []
+    iframes = []
+    first = True
+    for sid in SERVICES:
+        if sid not in services_html:
+            continue
+        label = SERVICES[sid].label
+        active = " active" if first else ""
+        tabs.append(f'<button class="tab{active}" data-tab="{sid}">{label}</button>')
+        encoded = base64.b64encode(services_html[sid].encode("utf-8")).decode("ascii")
+        iframes.append(f'<iframe id="{sid}" class="tab-content{active}" src="data:text/html;base64,{encoded}"></iframe>')
+        first = False
+    html = _COMBINED_TEMPLATE.replace("__TABS__", "".join(tabs)) \
+                           .replace("__IFRAMES__", "".join(iframes)) \
+                           .replace("__GENERATED_AT__", datetime.now(timezone.utc).isoformat(timespec="minutes"))
+    _write_text(output_path, html)
+    _write_text(output_path.with_suffix(".json"),
+                json.dumps(services_data, ensure_ascii=False, indent=2))
     return output_path

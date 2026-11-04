@@ -15,6 +15,8 @@ from pathlib import Path
 
 import requests
 
+from .services import DEFAULT_SERVICE_ID, SERVICES
+
 SLACK_API = "https://slack.com/api"
 DEFAULT_TIMEOUT = 30
 
@@ -65,19 +67,46 @@ def _top_categories_text(title: str, categories: list[dict]) -> str:
     return f"{title}: {items}"
 
 
-def build_slack_summary(data: dict) -> str:
-    """Текст сообщения в Slack из данных дашборда (build_dashboard_data)."""
+def _service_summary_block(service_id: str, data: dict) -> str:
+    """Блок сводки для одного сервиса."""
+    label = SERVICES[service_id].label
     kpis = data.get("kpis", {})
     day_line = f"За сутки: {_plural_conversations(kpis.get('day_total', 0))} всего"
     change = _new_today_text(data.get("daily") or [])
     if change:
         day_line += f" {change}"
     return "\n".join([
+        f"*{label}*",
         day_line,
         _top_categories_text("Топ-3 категорий за сутки", data.get("day_categories") or []),
         f"За неделю: {_plural_conversations(kpis.get('week_total', 0))} всего",
         _top_categories_text("Топ-3 категорий за неделю", data.get("week_categories") or []),
     ])
+
+
+def build_slack_summary(data: dict) -> str:
+    """Текст сообщения в Slack из данных дашборда.
+
+    Поддерживает как одиночный дашборд (с ключом kpis), так и объединённый
+    (с ключами сервисов из SERVICES).
+    """
+    if "kpis" in data:
+        kpis = data.get("kpis", {})
+        day_line = f"За сутки: {_plural_conversations(kpis.get('day_total', 0))} всего"
+        change = _new_today_text(data.get("daily") or [])
+        if change:
+            day_line += f" {change}"
+        return "\n".join([
+            day_line,
+            _top_categories_text("Топ-3 категорий за сутки", data.get("day_categories") or []),
+            f"За неделю: {_plural_conversations(kpis.get('week_total', 0))} всего",
+            _top_categories_text("Топ-3 категорий за неделю", data.get("week_categories") or []),
+        ])
+    blocks = []
+    for sid in SERVICES:
+        if sid in data:
+            blocks.append(_service_summary_block(sid, data[sid]))
+    return "\n\n".join(blocks)
 
 
 def _load_dashboard_data(dashboard_path: Path) -> dict | None:

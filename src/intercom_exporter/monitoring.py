@@ -105,6 +105,7 @@ def run_monitoring(
     prepare: Callable | None = prepare_monitoring_analysis,
     agents: bool = True,
     agent_workers: int = 10,
+    service_id: str | None = None,
 ) -> dict[str, Any]:
     window_set = windows or build_monitoring_windows()
     source_name = "backup_3_months" if full_archive else "last_week"
@@ -123,6 +124,7 @@ def run_monitoring(
             Path(snapshots["last_week"]["output_dir"]) / "conversations.json",
             Path(snapshots["last_day"]["output_dir"]) / "conversations.json",
             Path(export_result["output_dir"]) / "support-analysis",
+            service_id=service_id,
         )
         if agents and analysis:
             from .agents_orchestration import prepare_agents_bundle
@@ -132,6 +134,7 @@ def run_monitoring(
                 Path(snapshots["last_day"]["output_dir"]) / "conversations.json",
                 Path(analysis["output_dir"]),
                 workers=agent_workers,
+                service_id=service_id,
             )
             analysis = {**analysis, "agents_bundle": bundle}
     return {"export": export_result, "snapshots": snapshots, "analysis": analysis}

@@ -98,6 +98,14 @@ def test_build_slack_summary_skips_change_line_with_short_daily():
     assert text.splitlines()[0] == "За сутки: 111 обращений всего"
 
 
+def test_build_slack_summary_combined_services():
+    text = build_slack_summary({"vpn": _summary_data(), "hypertube": _summary_data()})
+
+    assert "*VPNНаоборот*" in text
+    assert "*HyperTube*" in text
+    assert "За сутки: 111 обращений всего" in text
+
+
 def test_build_slack_summary_without_categories():
     data = _summary_data()
     data["day_categories"] = []
@@ -252,7 +260,8 @@ def test_cli_merge_agents_auto_sends_slack_when_configured(tmp_path, monkeypatch
     calls = _merge_run(tmp_path, monkeypatch)
 
     assert main(["merge-agents", "--week", str(tmp_path / "run/last_week/conversations.json"),
-                 "--day", str(tmp_path / "run/last_day/conversations.json")]) == 0
+                 "--day", str(tmp_path / "run/last_day/conversations.json"),
+                 "--service", "vpn"]) == 0
     assert calls == [("xoxb-test", "C123")]
 
 
@@ -263,7 +272,7 @@ def test_cli_merge_agents_no_notify_flag_skips_slack(tmp_path, monkeypatch):
 
     assert main(["merge-agents", "--week", str(tmp_path / "run/last_week/conversations.json"),
                  "--day", str(tmp_path / "run/last_day/conversations.json"),
-                 "--no-notify"]) == 0
+                 "--no-notify", "--service", "vpn"]) == 0
     assert calls == []
 
 
@@ -283,5 +292,5 @@ def test_cli_merge_agents_skips_slack_without_settings(tmp_path, monkeypatch):
         notify_slack, "send_dashboard",
         lambda *a: calls.append(a) or "F123")
 
-    assert main(["merge-agents", "--week", str(week), "--day", str(day)]) == 0
+    assert main(["merge-agents", "--week", str(week), "--day", str(day), "--service", "vpn"]) == 0
     assert calls == []

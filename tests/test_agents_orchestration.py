@@ -224,7 +224,7 @@ def test_cli_merge_agents(tmp_path, capsys):
     manifest = prepare_agents_bundle(week, day, out, workers=2)
     _fill_results(manifest, category=None)
 
-    code = main(["merge-agents", "--week", str(week), "--day", str(day)])
+    code = main(["merge-agents", "--week", str(week), "--day", str(day), "--service", "vpn"])
     assert code == 0
     assert "Дашборд" in capsys.readouterr().out
     assert list(out.glob("dashboard_*.html"))

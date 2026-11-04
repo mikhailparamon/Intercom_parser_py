@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import load_agent_workers
+from .services import DEFAULT_SERVICE_ID, get_service, iter_services
 
 
 class AnalysisError(ValueError):
@@ -244,8 +245,9 @@ def _union_conversations(week_rows: list[dict], day_rows: list[dict]) -> list[di
     return list(union.values())
 
 
-def _monitoring_prompt(week: dict, day: dict, combined: dict, week_bytes: int, day_bytes: int) -> str:
-    template_path = Path(__file__).with_name("support_analysis_prompt_template.md")
+def _monitoring_prompt(week: dict, day: dict, combined: dict, week_bytes: int, day_bytes: int, service_id: str | None = None) -> str:
+    template_name = "support_analysis_prompt_template_hypertube.md" if service_id == "hypertube" else "support_analysis_prompt_template.md"
+    template_path = Path(__file__).with_name(template_name)
     template = template_path.read_text(encoding="utf-8")
     start = template.index("## 1. Безопасность и единица анализа")
     end = template.index("## 8. Формат `chatgpt_result.json`")
@@ -318,19 +320,27 @@ def _default_monitoring_output(week_path: Path, day_path: Path) -> Path:
     return week_path.parent / "support-analysis"
 
 
-def find_latest_run(data_root: str | Path = "data") -> Path:
-    """Каталог последнего прогона мониторинга: содержит срезы last_week и last_day."""
+def find_latest_run(data_root: str | Path = "data", service_id: str | None = None) -> Path:
+    """Каталог последнего прогона мониторинга.
+
+    Новая раскладка: data/<stamp>/<service>/last_week/...
+    Для обратной совместимости: если для vpn не найдено новое расположение,
+    ищет в корне data/<stamp>/last_week/... (старые прогоны).
+    """
     root = Path(data_root)
-    if not root.is_dir():
-        raise AnalysisError(f"Каталог данных не найден: {root}")
-    candidates = [
-        path for path in root.iterdir()
-        if path.is_dir()
-        and (path / "last_week" / "conversations.json").is_file()
-        and (path / "last_day" / "conversations.json").is_file()
-    ]
+    service = service_id or "vpn"
+    search_roots = [root / service]
+    if service == "vpn":
+        search_roots.append(root)
+    candidates = []
+    for search_root in search_roots:
+        if not search_root.is_dir():
+            continue
+        for path in search_root.iterdir():
+            if path.is_dir() and (path / "last_week" / "conversations.json").is_file() and (path / "last_day" / "conversations.json").is_file():
+                candidates.append(path)
     if not candidates:
-        raise AnalysisError(f"В {root} нет прогонов со срезами last_week/last_day")
+        raise AnalysisError(f"В {root} нет прогонов со срезами last_week/last_day для сервиса {service}")
 
     def stamp(path: Path) -> float:
         marker = path / "last_day" / "manifest.json"
@@ -351,7 +361,11 @@ def _resolve_run_paths(args: argparse.Namespace) -> tuple[Path, Path]:
         if args.run:
             raise AnalysisError("--run нельзя сочетать с --week/--day")
         return Path(args.week), Path(args.day)
-    run = Path(args.run) if args.run else find_latest_run()
+    if args.run:
+        run = Path(args.run)
+    else:
+        service = getattr(args, "service", None)
+        run = find_latest_run(service_id=service)
     return run / "last_week" / "conversations.json", run / "last_day" / "conversations.json"
 
 
@@ -359,6 +373,7 @@ def prepare_monitoring_analysis(
     week_input_path: str | Path,
     day_input_path: str | Path,
     output_dir: str | Path | None = None,
+    service_id: str | None = None,
 ) -> dict[str, Any]:
     week_path, day_path = Path(week_input_path), Path(day_input_path)
     week_rows = _read_conversations(week_path, allow_empty=True)
@@ -382,6 +397,7 @@ def prepare_monitoring_analysis(
     prompt = _monitoring_prompt(
         week_payload, day_payload, combined_payload,
         week_file.stat().st_size, day_file.stat().st_size,
+        service_id=service_id,
     )
     _write_text(output / "PROMPT.md", prompt)
     return {
@@ -616,6 +632,7 @@ def render_dashboard(
     result_path: str | Path,
     output_dir: str | Path | None = None,
     dashboard_dir: str | Path | None = None,
+    billing_category: str | None = None,
 ) -> dict[str, Any]:
     """Строит dashboard.html из готового chatgpt_result.json без слияния и отчёта."""
     week_path, day_path = Path(week_input_path), Path(day_input_path)
@@ -639,6 +656,7 @@ def render_dashboard(
             "week": period_analysis["week"]["recommendations"],
             "day": period_analysis["day"]["recommendations"],
         },
+        billing_category=billing_category,
     )
     output = Path(output_dir) if output_dir else _default_monitoring_output(week_path, day_path)
     dashboard_path = write_dashboard(data, Path(dashboard_dir) if dashboard_dir else output)
@@ -651,6 +669,7 @@ def generate_monitoring_report(
     result_path: str | Path,
     output_dir: str | Path | None = None,
     dashboard_dir: str | Path | None = None,
+    billing_category: str | None = None,
 ) -> dict[str, Any]:
     week_path, day_path = Path(week_input_path), Path(day_input_path)
     week_rows = _read_conversations(week_path, allow_empty=True)
@@ -717,6 +736,7 @@ def generate_monitoring_report(
             "week": period_analysis["week"]["recommendations"],
             "day": period_analysis["day"]["recommendations"],
         },
+        billing_category=billing_category,
     )
     dashboard_path = write_dashboard(dashboard_data, Path(dashboard_dir) if dashboard_dir else output)
     return {
@@ -748,6 +768,7 @@ def build_parser() -> argparse.ArgumentParser:
                                  help="Число параллельных субагентов для пакета оркестрации (2–20; по умолчанию: AGENT_WORKERS из .env или 10)")
     monitor_prepare.add_argument("--no-agents", action="store_true",
                                  help="Не создавать пакет оркестрации субагентов (только PROMPT.md и входные JSON)")
+    monitor_prepare.add_argument("--service", help="Сервис (vpn или hypertube); по умолчанию vpn")
     monitor_report = subparsers.add_parser("report-monitoring", help="Проверить общий результат и построить единый отчёт по двум окнам")
     monitor_report.add_argument("--week", required=True, help="Исходный conversations.json недельного окна")
     monitor_report.add_argument("--day", required=True, help="Исходный conversations.json дневного окна")
@@ -762,6 +783,7 @@ def build_parser() -> argparse.ArgumentParser:
     merge.add_argument("--compare-with", help="Прошлый chatgpt_result.json для отчёта сравнения")
     merge.add_argument("--recommendations", help="JSON-файл со списком общих рекомендаций для отчёта и дашборда")
     merge.add_argument("--dashboard-dir", help="Каталог для dashboard.html (по умолчанию: каталог отчёта)")
+    merge.add_argument("--service", help="Обработать только один сервис (vpn или hypertube); по умолчанию все")
     dash = subparsers.add_parser("render-dashboard", help="Построить dashboard.html из готового chatgpt_result.json без слияния")
     dash.add_argument("--week", help="Исходный conversations.json недельного окна (по умолчанию: последний прогон)")
     dash.add_argument("--day", help="Исходный conversations.json дневного окна (по умолчанию: последний прогон)")
@@ -769,17 +791,20 @@ def build_parser() -> argparse.ArgumentParser:
     dash.add_argument("--result", help="Готовый chatgpt_result.json (по умолчанию: support-analysis рядом с прогоном)")
     dash.add_argument("--output", help="Каталог результатов отчёта")
     dash.add_argument("--dashboard-dir", help="Каталог для dashboard.html (по умолчанию: каталог отчёта)")
+    dash.add_argument("--service", help="Обработать только один сервис (vpn или hypertube); по умолчанию все")
     research = subparsers.add_parser("research", help="Единый прогон: бандл → ожидание оркестрации → merge → дашборд")
     research.add_argument("--run", help="Каталог прогона в data/ (по умолчанию: последний)")
     research.add_argument("--workers", type=int,
                           help="Число чанков субагентов, если бандл ещё не создан (2–20; по умолчанию: AGENT_WORKERS из .env или 10)")
     research.add_argument("--compare-with", help="Прошлый chatgpt_result.json для отчёта сравнения")
     research.add_argument("--dashboard-dir", help="Каталог для dashboard.html")
+    research.add_argument("--service", help="Обработать только один сервис (vpn или hypertube); по умолчанию все")
     for cmd in (merge, research):
         cmd.add_argument("--no-notify", action="store_true",
                          help="Не отправлять дашборд в Slack после построения (по умолчанию отправляется, если заданы SLACK_BOT_TOKEN и SLACK_CHANNEL_ID)")
     notify = subparsers.add_parser("notify-slack", help="Отправить dashboard.html и статистику дашборда в Slack-канал")
     notify.add_argument("--run", help="Каталог прогона в data/ (по умолчанию: последний)")
+    notify.add_argument("--service", help="Отправить дашборд только одного сервиса (vpn или hypertube); по умолчанию общий дашборд")
     notify.add_argument("--channel", help="ID канала Slack (по умолчанию: SLACK_CHANNEL_ID из .env)")
     return parser
 
@@ -810,6 +835,42 @@ def _maybe_notify_slack(args: argparse.Namespace, result: dict) -> None:
     print(f"Дашборд отправлен в Slack (канал {settings.channel_id}), file_id: {file_id}")
 
 
+def _services_for_args(args: argparse.Namespace):
+    """Список сервисов для обработки: один при --service, иначе все."""
+    if getattr(args, "service", None):
+        return [get_service(args.service)]
+    return list(iter_services())
+
+
+def _service_run_dir(service, explicit_run: str | None = None) -> Path:
+    """Каталог прогона для сервиса."""
+    if explicit_run:
+        return Path(explicit_run)
+    return find_latest_run(service_id=service.id)
+
+
+def _build_combined_dashboard(service_dashboard_paths: dict[str, Path]) -> Path:
+    """Собирает общий дашборд с вкладками из дашбордов сервисов.
+
+    Пишет в общий родительский каталог прогонов сервисов:
+    data/<stamp>/dashboard_DD_MM_YYYY.html для раскладки data/<stamp>/<service>,
+    либо data/dashboard_DD_MM_YYYY.html для раскладки data/<service>/<stamp>.
+    """
+    from .dashboard import write_combined_dashboard
+
+    services_data: dict[str, dict] = {}
+    services_html: dict[str, str] = {}
+    for sid, dash_path in service_dashboard_paths.items():
+        json_path = dash_path.with_suffix(".json")
+        services_data[sid] = json.loads(json_path.read_text(encoding="utf-8-sig"))
+        services_html[sid] = dash_path.read_text(encoding="utf-8")
+    run_roots = [dash_path.parent.parent for dash_path in service_dashboard_paths.values()]
+    run_root = Path(run_roots[0]).resolve()
+    if len(run_roots) > 1:
+        run_root = Path(*run_root.parts[:len(os.path.commonprefix([list(r.resolve().parts) for r in run_roots]))])
+    return write_combined_dashboard(services_data, services_html, run_root)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -823,7 +884,7 @@ def main(argv: list[str] | None = None) -> int:
             result = generate_report(args.input, args.result, args.output)
             print(f"Отчёт сохранён: {result['report_path']}. Разметка: {result['classifications_path']}")
         elif args.command == "prepare-monitoring":
-            result = prepare_monitoring_analysis(args.week, args.day, args.output)
+            result = prepare_monitoring_analysis(args.week, args.day, args.output, service_id=args.service)
             print(
                 f"Подготовлены недельный срез ({result['week_conversation_count']}), дневной срез "
                 f"({result['day_conversation_count']}), уникальных ID: {result['unique_conversation_count']}. "
@@ -832,8 +893,11 @@ def main(argv: list[str] | None = None) -> int:
             if not args.no_agents:
                 from .agents_orchestration import prepare_agents_bundle
 
-                bundle = prepare_agents_bundle(args.week, args.day, result["output_dir"],
-                                               workers=args.workers if args.workers is not None else load_agent_workers())
+                bundle = prepare_agents_bundle(
+                    args.week, args.day, result["output_dir"],
+                    workers=args.workers if args.workers is not None else load_agent_workers(),
+                    service_id=getattr(args, "service", None),
+                )
                 print(
                     f"Пакет оркестрации субагентов готов: {bundle['workers']} чанков, "
                     f"таксономия: {bundle['taxonomy_source']}. Манифест: {bundle['work_dir']}/manifest.json. "
@@ -841,24 +905,59 @@ def main(argv: list[str] | None = None) -> int:
                 )
             print("JSON-файлы и PROMPT.md готовы для ручного анализа.")
         elif args.command == "merge-agents":
-            from .agents_orchestration import merge_agents_results
+            from .agents_orchestration import get_billing_category, get_taxonomy, merge_agents_results
 
-            week_path, day_path = _resolve_run_paths(args)
-            output = Path(args.output) if args.output else _default_monitoring_output(week_path, day_path)
-            recommendations = args.recommendations
-            if recommendations is None:
-                default_rec = output / "agents_work" / "recommendations.json"
-                if default_rec.is_file():
-                    recommendations = str(default_rec)
-            result = merge_agents_results(week_path, day_path, output, compare_with=args.compare_with,
-                                          recommendations=recommendations, dashboard_dir=args.dashboard_dir)
-            print(
-                f"Слито классификаций: {result['unique_conversation_count']}. Результат: {result['result_path']}. "
-                f"Отчёт: {result['report_path']}. Дашборд: {result['dashboard_path']}"
-            )
-            if "comparison_path" in result:
-                print(f"Сравнение с предыдущим прогоном: {result['comparison_path']}")
-            _maybe_notify_slack(args, result)
+            explicit_service = bool(getattr(args, "service", None))
+            services = _services_for_args(args)
+            service_results: dict[str, dict] = {}
+            for service in services:
+                args.service = service.id
+                try:
+                    week_path, day_path = _resolve_run_paths(args)
+                except AnalysisError as exc:
+                    if explicit_service:
+                        raise
+                    print(f"{service.label}: {exc}")
+                    continue
+                output = Path(args.output) if args.output else _default_monitoring_output(week_path, day_path)
+                taxonomy = get_taxonomy(service.id)
+                if not taxonomy:
+                    print(f"{service.label}: таксономия не задана — слияние пропущено.")
+                    continue
+                recommendations = args.recommendations
+                if recommendations is None:
+                    default_rec = output / "agents_work" / "recommendations.json"
+                    if default_rec.is_file():
+                        recommendations = str(default_rec)
+                manifest_path = output / "agents_work" / "manifest.json"
+                taxonomy_source = "static_v5"
+                if manifest_path.is_file():
+                    manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+                    taxonomy_source = manifest.get("taxonomy_source", taxonomy_source)
+                result = merge_agents_results(
+                    week_path, day_path, output,
+                    compare_with=args.compare_with,
+                    recommendations=recommendations,
+                    dashboard_dir=args.dashboard_dir,
+                    taxonomy=taxonomy,
+                    taxonomy_source=taxonomy_source,
+                    billing_category=get_billing_category(service.id),
+                )
+                print(
+                    f"{service.label}: слито {result['unique_conversation_count']} классификаций. "
+                    f"Отчёт: {result['report_path']}. Дашборд: {result['dashboard_path']}"
+                )
+                if "comparison_path" in result:
+                    print(f"  Сравнение с предыдущим прогоном: {result['comparison_path']}")
+                service_results[service.id] = result
+            if len(service_results) > 1:
+                dashboards = {sid: Path(res["dashboard_path"]) for sid, res in service_results.items()}
+                combined_dashboard = _build_combined_dashboard(dashboards)
+                print(f"Общий дашборд: {combined_dashboard}")
+                _maybe_notify_slack(args, {"dashboard_path": str(combined_dashboard)})
+            elif service_results:
+                _maybe_notify_slack(args, next(iter(service_results.values())))
+            return 0
         elif args.command == "render-dashboard":
             week_path, day_path = _resolve_run_paths(args)
             result_path = Path(args.result) if args.result else _default_monitoring_output(week_path, day_path) / "chatgpt_result.json"
@@ -866,42 +965,81 @@ def main(argv: list[str] | None = None) -> int:
                                        output_dir=args.output, dashboard_dir=args.dashboard_dir)
             print(f"Дашборд: {outcome['dashboard_path']}")
         elif args.command == "research":
-            from .agents_orchestration import merge_agents_results, prepare_agents_bundle
+            from .agents_orchestration import (
+                get_billing_category, get_taxonomy, merge_agents_results, prepare_agents_bundle,
+            )
 
-            run_dir = Path(args.run) if args.run else find_latest_run()
-            week_path = run_dir / "last_week" / "conversations.json"
-            day_path = run_dir / "last_day" / "conversations.json"
-            output = run_dir / "support-analysis"
-            if not (output / "agents_work" / "manifest.json").is_file():
-                bundle = prepare_agents_bundle(week_path, day_path, output,
-                                               workers=args.workers if args.workers is not None else load_agent_workers())
-                print(
-                    f"Пакет оркестрации субагентов готов: {bundle['workers']} чанков. "
-                    f"Манифест: {bundle['work_dir']}/manifest.json"
+            services = _services_for_args(args)
+            service_results: dict[str, dict] = {}
+            pending_services: list[str] = []
+            run_roots: list[Path] = []
+            for service in services:
+                try:
+                    run_dir = _service_run_dir(service, args.run)
+                except AnalysisError as exc:
+                    if args.service:
+                        raise
+                    print(f"{service.label}: {exc}")
+                    continue
+                run_roots.append(run_dir)
+                week_path = run_dir / "last_week" / "conversations.json"
+                day_path = run_dir / "last_day" / "conversations.json"
+                output = run_dir / "support-analysis"
+                taxonomy = get_taxonomy(service.id)
+                if not taxonomy:
+                    print(
+                        f"{service.label}: таксономия не задана — классификация пропущена. "
+                        f"Входные файлы для анализа: {output}"
+                    )
+                    continue
+                if not (output / "agents_work" / "manifest.json").is_file():
+                    bundle = prepare_agents_bundle(
+                        week_path, day_path, output,
+                        workers=args.workers if args.workers is not None else load_agent_workers(),
+                        taxonomy=taxonomy,
+                        taxonomy_source=f"{service.id}_v1",
+                    )
+                    print(
+                        f"{service.label}: пакет оркестрации субагентов готов: {bundle['workers']} чанков. "
+                        f"Манифест: {bundle['work_dir']}/manifest.json"
+                    )
+                manifest = json.loads((output / "agents_work" / "manifest.json").read_text(encoding="utf-8-sig"))
+                total = len(manifest["chunks"])
+                ready = sum(1 for entry in manifest["chunks"] if Path(entry["result_path"]).is_file())
+                if ready < total:
+                    print(
+                        f"{service.label}: Оркестрация не завершена: готовы результаты {ready} из {total} воркеров. "
+                        "Запустите субагентов по протоколу agents_protocol.md и повторите research."
+                    )
+                    pending_services.append(service.id)
+                    continue
+                recommendations = output / "agents_work" / "recommendations.json"
+                result = merge_agents_results(
+                    week_path, day_path, output,
+                    compare_with=args.compare_with,
+                    recommendations=str(recommendations) if recommendations.is_file() else None,
+                    dashboard_dir=args.dashboard_dir,
+                    taxonomy=taxonomy,
+                    taxonomy_source=manifest.get("taxonomy_source", f"{service.id}_v1"),
+                    billing_category=get_billing_category(service.id),
                 )
-            manifest = json.loads((output / "agents_work" / "manifest.json").read_text(encoding="utf-8-sig"))
-            total = len(manifest["chunks"])
-            ready = sum(1 for entry in manifest["chunks"] if Path(entry["result_path"]).is_file())
-            if ready < total:
                 print(
-                    f"Оркестрация не завершена: готовы результаты {ready} из {total} воркеров. "
-                    "Запустите субагентов по протоколу agents_protocol.md и повторите research."
+                    f"{service.label}: слито {result['unique_conversation_count']} классификаций. "
+                    f"Отчёт: {result['report_path']}. Дашборд: {result['dashboard_path']}"
                 )
+                if "comparison_path" in result:
+                    print(f"  Сравнение с предыдущим прогоном: {result['comparison_path']}")
+                service_results[service.id] = result
+            if pending_services:
                 return 3
-            recommendations = output / "agents_work" / "recommendations.json"
-            result = merge_agents_results(
-                week_path, day_path, output,
-                compare_with=args.compare_with,
-                recommendations=str(recommendations) if recommendations.is_file() else None,
-                dashboard_dir=args.dashboard_dir,
-            )
-            print(
-                f"Слито классификаций: {result['unique_conversation_count']}. Отчёт: {result['report_path']}. "
-                f"Дашборд: {result['dashboard_path']}"
-            )
-            if "comparison_path" in result:
-                print(f"Сравнение с предыдущим прогоном: {result['comparison_path']}")
-            _maybe_notify_slack(args, result)
+            if len(service_results) > 1:
+                dashboards = {sid: Path(res["dashboard_path"]) for sid, res in service_results.items()}
+                combined_dashboard = _build_combined_dashboard(dashboards)
+                print(f"Общий дашборд: {combined_dashboard}")
+                _maybe_notify_slack(args, {"dashboard_path": str(combined_dashboard)})
+            elif service_results:
+                _maybe_notify_slack(args, next(iter(service_results.values())))
+            return 0
         elif args.command == "notify-slack":
             from . import config
             from .notify_slack import send_dashboard
@@ -910,12 +1048,36 @@ def main(argv: list[str] | None = None) -> int:
             channel = args.channel or (settings.channel_id if settings else "")
             if settings is None or not channel:
                 parser.error("notify-slack: задайте SLACK_BOT_TOKEN и SLACK_CHANNEL_ID в .env (или передайте --channel)")
-            run_dir = Path(args.run) if args.run else find_latest_run()
-            analysis = run_dir / "support-analysis"
-            dashboards = sorted(analysis.glob("dashboard_*.html"))
-            if not dashboards:
-                raise AnalysisError(f"Дашборд не найден: {analysis}/dashboard_DD_MM_YYYY.html")
-            file_id = send_dashboard(settings.bot_token, channel, dashboards[-1])
+            if args.service:
+                service = get_service(args.service)
+                run_dir = _service_run_dir(service, args.run)
+                analysis = run_dir / "support-analysis"
+                dashboards = sorted(analysis.glob("dashboard_*.html"))
+                if not dashboards:
+                    raise AnalysisError(f"Дашборд не найден: {analysis}/dashboard_DD_MM_YYYY.html")
+                dashboard_path = dashboards[-1]
+            else:
+                services = list(iter_services())
+                service_dashboards: dict[str, Path] = {}
+                run_root_candidates: list[Path] = []
+                for service in services:
+                    try:
+                        run_dir = _service_run_dir(service, args.run)
+                    except AnalysisError:
+                        continue
+                    analysis = run_dir / "support-analysis"
+                    dashboards = sorted(analysis.glob("dashboard_*.html"))
+                    if dashboards:
+                        service_dashboards[service.id] = dashboards[-1]
+                        run_root_candidates.append(run_dir.parent)
+                if len(service_dashboards) > 1:
+                    run_root = sorted(run_root_candidates)[-1]
+                    dashboard_path = _build_combined_dashboard(run_root, service_dashboards)
+                elif service_dashboards:
+                    dashboard_path = next(iter(service_dashboards.values()))
+                else:
+                    raise AnalysisError("Дашборды не найдены ни для одного сервиса")
+            file_id = send_dashboard(settings.bot_token, channel, dashboard_path)
             print(f"Дашборд отправлен в Slack (канал {channel}), file_id: {file_id}")
         else:
             result = generate_monitoring_report(args.week, args.day, args.result, args.output, args.dashboard_dir)

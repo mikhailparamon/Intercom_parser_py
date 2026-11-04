@@ -141,7 +141,7 @@ def test_run_monitoring_prepares_one_shared_analysis_from_both_windows(tmp_path)
             (export_dir / "manifest.json").write_text(json.dumps({"status": "success"}), encoding="utf-8")
             return {"output_dir": str(export_dir), "status": "success", "error_count": 0}
 
-    def prepare(week_path, day_path, output_dir):
+    def prepare(week_path, day_path, output_dir, **kwargs):
         calls.append((Path(week_path), Path(day_path), Path(output_dir)))
         return prepare_monitoring_analysis(week_path, day_path, output_dir)
 
