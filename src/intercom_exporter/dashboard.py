@@ -83,6 +83,7 @@ def build_dashboard_data(
     day_period: str,
     recommendations: dict | None = None,
     billing_category: str | None = None,
+    fixed_subcategories: list[str] | None = None,
 ) -> dict:
     """Собирает все агрегаты дашборда из провалидированных данных report-monitoring.
 
@@ -102,10 +103,26 @@ def build_dashboard_data(
     day_classifications = [item for item in classifications if item["id"] in day_ids]
     week_categories = _category_breakdown(week_classifications)
     subcategory_counts = Counter(item["subcategory"] for item in week_classifications)
-    subcategories = [
-        {"name": name, "count": count}
-        for name, count in sorted(subcategory_counts.items(), key=lambda item: (-item[1], item[0].casefold()))[:10]
-    ]
+    if fixed_subcategories:
+        fixed = {name: subcategory_counts.get(name, 0) for name in fixed_subcategories}
+        free_sorted = sorted(
+            ((name, count) for name, count in subcategory_counts.items() if name not in fixed_subcategories),
+            key=lambda item: (-item[1], item[0].casefold()),
+        )
+        free_top = free_sorted[:max(10 - len(fixed_subcategories), 0)]
+        fixed_items = [(name, fixed[name]) for name in fixed_subcategories]
+        subcategories = [
+            {"name": name, "count": count}
+            for name, count in sorted(
+                fixed_items + free_top,
+                key=lambda item: (-item[1], item[0].casefold()),
+            )
+        ]
+    else:
+        subcategories = [
+            {"name": name, "count": count}
+            for name, count in sorted(subcategory_counts.items(), key=lambda item: (-item[1], item[0].casefold()))[:10]
+        ]
     severity_week = _severity_breakdown(week_classifications)
     high_cases_all = [
         {"id": item["id"], "category": item["category"], "subcategory": item["subcategory"],

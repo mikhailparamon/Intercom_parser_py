@@ -647,6 +647,7 @@ def render_dashboard(
     output_dir: str | Path | None = None,
     dashboard_dir: str | Path | None = None,
     billing_category: str | None = None,
+    fixed_subcategories: list[str] | None = None,
 ) -> dict[str, Any]:
     """Строит dashboard.html из готового chatgpt_result.json без слияния и отчёта."""
     week_path, day_path = Path(week_input_path), Path(day_input_path)
@@ -671,6 +672,7 @@ def render_dashboard(
             "day": period_analysis["day"]["recommendations"],
         },
         billing_category=billing_category,
+        fixed_subcategories=fixed_subcategories,
     )
     output = Path(output_dir) if output_dir else _default_monitoring_output(week_path, day_path)
     dashboard_path = write_dashboard(data, Path(dashboard_dir) if dashboard_dir else output)
@@ -684,6 +686,7 @@ def generate_monitoring_report(
     output_dir: str | Path | None = None,
     dashboard_dir: str | Path | None = None,
     billing_category: str | None = None,
+    fixed_subcategories: list[str] | None = None,
 ) -> dict[str, Any]:
     week_path, day_path = Path(week_input_path), Path(day_input_path)
     week_rows = _read_conversations(week_path, allow_empty=True)
@@ -751,6 +754,7 @@ def generate_monitoring_report(
             "day": period_analysis["day"]["recommendations"],
         },
         billing_category=billing_category,
+        fixed_subcategories=fixed_subcategories,
     )
     dashboard_path = write_dashboard(dashboard_data, Path(dashboard_dir) if dashboard_dir else output)
     return {

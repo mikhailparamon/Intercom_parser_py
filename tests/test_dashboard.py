@@ -299,3 +299,62 @@ def test_high_cases_list_day_window_first():
     data = build_dashboard_data(week_rows, day_rows, CATEGORIES, classifications, "w", "d")
 
     assert [case["id"] for case in data["high_cases"]] == ["d_new", "w_old"]
+
+
+FIXED_SUBCATS = ["Отмены", "Расширение Chrome", "Расширение Яндекс", "Расширение для др. браузеров", "TV/приставка", "Android-приложение", "Windows-приложение"]
+
+
+def test_subcategories_include_fixed_seven_when_passed():
+    classifications = [
+        _classification("w1", "Оплата и подписка", "Chrome", None),
+    ]
+
+    data = build_dashboard_data(_week_rows(), _day_rows(), CATEGORIES, classifications, "w", "d",
+                                fixed_subcategories=FIXED_SUBCATS)
+
+    names = [item["name"] for item in data["subcategories"]]
+    for fixed in FIXED_SUBCATS:
+        assert fixed in names
+    assert {"name": "Chrome", "count": 1} in data["subcategories"]
+
+
+def test_subcategories_sorted_by_count_desc_with_fixed():
+    rows = [{"id": f"c{i}", "created_at": "2026-10-26T09:00:00Z", "updated_at": "2026-10-26T10:00:00Z"}
+            for i in range(4)]
+    classifications = [
+        _classification("c0", "Оплата и подписка", "Chrome", None),
+        _classification("c1", "Оплата и подписка", "Chrome", None),
+        _classification("c2", "Оплата и подписка", "Отмены", None),
+        _classification("c3", "Оплата и подписка", "Свободная", None),
+    ]
+
+    data = build_dashboard_data(rows, rows, CATEGORIES, classifications, "w", "d",
+                                fixed_subcategories=FIXED_SUBCATS)
+
+    counts = [item["count"] for item in data["subcategories"]]
+    assert counts == sorted(counts, reverse=True)
+    names = [item["name"] for item in data["subcategories"]]
+    assert names[0] == "Chrome"
+    assert "Отмены" in names
+    assert "Свободная" in names
+
+
+def test_subcategories_fill_remaining_slots_with_free():
+    rows = [{"id": f"c{i}", "created_at": "2026-10-26T09:00:00Z", "updated_at": "2026-10-26T10:00:00Z"}
+            for i in range(20)]
+    classifications = (
+        [_classification(f"c{i}", "Оплата и подписка", "Chrome", None) for i in range(5)]
+        + [_classification(f"c{i}", "Оплата и подписка", "Отмены", None) for i in range(5, 10)]
+        + [_classification(f"c{i}", "Оплата и подписка", "Свободная1", None) for i in range(10, 15)]
+        + [_classification(f"c{i}", "Оплата и подписка", "Свободная2", None) for i in range(15, 20)]
+    )
+
+    data = build_dashboard_data(rows, rows, CATEGORIES, classifications, "w", "d",
+                                fixed_subcategories=FIXED_SUBCATS)
+
+    names = [item["name"] for item in data["subcategories"]]
+    assert len(names) == 10
+    for fixed in FIXED_SUBCATS:
+        assert fixed in names
+    assert "Свободная1" in names
+    assert "Свободная2" in names

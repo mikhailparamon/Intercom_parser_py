@@ -83,6 +83,18 @@ HYPERTUBE_TAXONOMY = [
 ]
 HYPERTUBE_BILLING_CATEGORY = "Оплата и подписка"
 
+# Фиксированные подкатегории HyperTube, которые всегда присутствуют в дашборде.
+# Источник истины — раздел 3 шаблона support_analysis_prompt_template_hypertube.md.
+HYPERTUBE_FIXED_SUBCATEGORIES = [
+    "Отмены",
+    "Расширение Chrome",
+    "Расширение Яндекс",
+    "Расширение для др. браузеров",
+    "TV/приставка",
+    "Android-приложение",
+    "Windows-приложение",
+]
+
 
 def get_taxonomy(service_id: str | None = None) -> list[dict]:
     """Таксономия категорий для сервиса."""
@@ -95,6 +107,13 @@ def get_billing_category(service_id: str | None = None) -> str:
     if service_id == "hypertube":
         return HYPERTUBE_BILLING_CATEGORY
     return BILLING_CATEGORY
+
+
+def get_fixed_subcategories(service_id: str | None = None) -> list[str]:
+    """Фиксированные подкатегории для сервиса; для VPN пока не заданы."""
+    if service_id == "hypertube":
+        return list(HYPERTUBE_FIXED_SUBCATEGORIES)
+    return []
 
 
 def prepare_agents_bundle(
@@ -188,6 +207,126 @@ def _normalized_classification(item: dict) -> dict:
     }
 
 
+def _conversation_text(conversation: dict | None, roles: tuple[str, ...] = ("customer",)) -> str:
+    """Возвращает склеенный текст сообщений разговора, фильтруя по ролям."""
+    if not conversation:
+        return ""
+    parts = [conversation.get("title", "")]
+    for message in conversation.get("messages", []):
+        if message.get("role") in roles:
+            parts.append(message.get("text", ""))
+    return " ".join(part for part in parts if part)
+
+
+def _normalize_hypertube_subcategory(value: str) -> str:
+    """Приводит известные варианты написания подкатегорий HyperTube к каноническим именам."""
+    lowered = value.lower().strip().strip('"').strip("'").replace("—", "-")
+    if lowered in ("", "-", "нет"):
+        return value
+    if lowered.startswith("отмен") or "отпис" in lowered or "cancel" in lowered:
+        return "Отмены"
+    if "chrome" in lowered or "хром" in lowered:
+        return "Расширение Chrome"
+    if "yandex" in lowered or "яндекс" in lowered:
+        return "Расширение Яндекс"
+    if any(token in lowered for token in ("firefox", "opera", "edge", "safari", "brave")):
+        return "Расширение для др. браузеров"
+    if any(token in lowered for token in ("android tv", "androidtv", "телевизор", "smart tv", "приставка", "тв", "tv")):
+        return "TV/приставка"
+    if "android" in lowered or "андроид" in lowered:
+        return "Android-приложение"
+    if "windows" in lowered or "виндовс" in lowered or "пк" in lowered or "компьютер" in lowered:
+        return "Windows-приложение"
+    return value
+
+
+def _hypertube_is_cancel(text: str) -> bool:
+    lowered = text.lower()
+    return any(
+        token in lowered
+        for token in (
+            "отменить подписку",
+            "отмена подписки",
+            "отмените подписку",
+            "отмени подписку",
+            "отписаться",
+            "cancel my subscription",
+            "cancel subscription",
+        )
+    )
+
+
+def _hypertube_is_chrome(text: str) -> bool:
+    lowered = text.lower()
+    return any(token in lowered for token in ("chrome", "хром", "google chrome", "chrome web store"))
+
+
+def _hypertube_is_yandex(text: str) -> bool:
+    lowered = text.lower()
+    return "yandex" in lowered or "яндекс" in lowered
+
+
+def _hypertube_is_other_browser(text: str) -> bool:
+    lowered = text.lower()
+    return any(token in lowered for token in ("firefox", "opera", "edge", "safari", "brave"))
+
+
+def _hypertube_is_tv(text: str) -> bool:
+    lowered = text.lower()
+    return any(token in lowered for token in ("телевизор", "smart tv", "приставка", "android tv", "тв", "tv"))
+
+
+def _hypertube_is_android(text: str) -> bool:
+    lowered = text.lower()
+    return "android" in lowered or "андроид" in lowered
+
+
+def _hypertube_is_windows(text: str) -> bool:
+    lowered = text.lower()
+    if any(token in lowered for token in ("windows", "виндовс")):
+        return True
+    return any(token in lowered for token in ("пк", "компьютер", "ноутбук"))
+
+
+def _apply_hypertube_fixed_subcategory_rules(subcategory: str, conversation: dict | None) -> str:
+    """Нормализует подкатегорию и применяет фиксированные правила по тексту переписки.
+
+    Порядок приоритета (первое сработавшее правило побеждает):
+    1. Отмены
+    2. Расширение Chrome
+    3. Расширение Яндекс
+    4. Расширение для др. браузеров
+    5. TV/приставка
+    6. Android-приложение
+    7. Windows-приложение
+    """
+    normalized = _normalize_hypertube_subcategory(subcategory)
+    user_text = _conversation_text(conversation, roles=("customer",))
+
+    if _hypertube_is_cancel(user_text):
+        return "Отмены"
+    if _hypertube_is_chrome(user_text):
+        return "Расширение Chrome"
+    if _hypertube_is_yandex(user_text):
+        return "Расширение Яндекс"
+    if _hypertube_is_other_browser(user_text):
+        return "Расширение для др. браузеров"
+    if _hypertube_is_tv(user_text):
+        return "TV/приставка"
+    if _hypertube_is_android(user_text):
+        return "Android-приложение"
+    if _hypertube_is_windows(user_text):
+        return "Windows-приложение"
+
+    return normalized if normalized in HYPERTUBE_FIXED_SUBCATEGORIES else subcategory
+
+
+def _finalize_hypertube_classification(item: dict, conversation: dict | None) -> dict:
+    normalized = _normalized_classification(item)
+    normalized["subcategory"] = _apply_hypertube_fixed_subcategory_rules(normalized["subcategory"], conversation)
+    return normalized
+
+
 def _load_recommendations(recommendations: str | Path | list[str] | None) -> list[str]:
     """Нормализует общие рекомендации: список строк или JSON-файл со списком строк."""
     if recommendations is None:
@@ -239,9 +378,10 @@ def merge_agents_results(
     taxonomy: list[dict] | None = None,
     taxonomy_source: str = "static_v5",
     billing_category: str | None = None,
+    service_id: str | None = None,
 ) -> dict[str, Any]:
-    taxonomy = taxonomy or TAXONOMY
-    billing_category = billing_category or BILLING_CATEGORY
+    taxonomy = taxonomy or get_taxonomy(service_id)
+    billing_category = billing_category or get_billing_category(service_id)
     """Валидирует result_XX.json субагентов, собирает chatgpt_result.json и строит отчёт+дашборд.
 
     Рекомендации — общие для отчёта: либо список строк, либо путь к JSON-файлу
@@ -300,7 +440,14 @@ def merge_agents_results(
     if errors:
         raise AnalysisError("Ошибки слияния результатов субагентов:\n- " + "\n- ".join(errors))
 
-    classifications = [_normalized_classification(merged[cid]) for cid in union_ids]
+    conversation_by_id = {str(c["id"]): c for c in union_payload["conversations"]}
+    if service_id == "hypertube":
+        classifications = [
+            _finalize_hypertube_classification(merged[cid], conversation_by_id.get(cid))
+            for cid in union_ids
+        ]
+    else:
+        classifications = [_normalized_classification(merged[cid]) for cid in union_ids]
     week_ids = {item["id"] for item in _build_payload(week_rows)["conversations"]}
     day_ids = {item["id"] for item in _build_payload(day_rows)["conversations"]}
 
@@ -341,9 +488,11 @@ def merge_agents_results(
     result_path = output / "chatgpt_result.json"
     _write_json(result_path, result)
 
+    fixed_subcategories = get_fixed_subcategories(service_id)
     report = generate_monitoring_report(week_input_path, day_input_path, result_path, output,
                                         dashboard_dir=dashboard_dir,
-                                        billing_category=billing_category)
+                                        billing_category=billing_category,
+                                        fixed_subcategories=fixed_subcategories)
     outcome: dict[str, Any] = {
         "unique_conversation_count": len(classifications),
         "result_path": str(result_path),

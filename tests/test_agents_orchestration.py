@@ -4,7 +4,10 @@ from pathlib import Path
 import pytest
 
 from intercom_exporter.agents_orchestration import (
+    HYPERTUBE_FIXED_SUBCATEGORIES,
     TAXONOMY,
+    _apply_hypertube_fixed_subcategory_rules,
+    _normalize_hypertube_subcategory,
     merge_agents_results,
     prepare_agents_bundle,
 )
@@ -404,3 +407,117 @@ def test_cli_research_merges_and_builds_dashboard(tmp_path, monkeypatch):
     assert list((tmp_path / "dash").glob("dashboard_*.html"))
     result = json.loads((out / "chatgpt_result.json").read_text(encoding="utf-8"))
     assert result["recommendations"] == ["Совет"]
+
+
+def _hypertube_conv(customer_text="", operator_text=""):
+    messages = []
+    if customer_text:
+        messages.append({"role": "customer", "text": customer_text})
+    if operator_text:
+        messages.append({"role": "operator", "text": operator_text})
+    return {"id": "1", "title": "", "messages": messages}
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("Отмена подписки", "Отмены"),
+    ("отменить", "Отмены"),
+    ("Chrome", "Расширение Chrome"),
+    ("хром", "Расширение Chrome"),
+    ("Расширение в Chrome", "Расширение Chrome"),
+    ("Yandex", "Расширение Яндекс"),
+    ("яндекс", "Расширение Яндекс"),
+    ("Opera", "Расширение для др. браузеров"),
+    ("Edge", "Расширение для др. браузеров"),
+    ("Android TV", "TV/приставка"),
+    ("телевизор", "TV/приставка"),
+    ("Android", "Android-приложение"),
+    ("андроид", "Android-приложение"),
+    ("Windows", "Windows-приложение"),
+    ("ПК", "Windows-приложение"),
+])
+def test_normalize_hypertube_subcategory_maps_variants(raw, expected):
+    assert _normalize_hypertube_subcategory(raw) == expected
+
+
+def test_hypertube_rules_prioritize_cancel():
+    conv = _hypertube_conv(customer_text="хочу отменить подписку, у меня chrome")
+    assert _apply_hypertube_fixed_subcategory_rules("Chrome", conv) == "Отмены"
+
+
+def test_hypertube_rules_prioritize_chrome_over_other_browsers():
+    conv = _hypertube_conv(customer_text="не работает в chrome и opera")
+    assert _apply_hypertube_fixed_subcategory_rules("Opera", conv) == "Расширение Chrome"
+
+
+def test_hypertube_rules_detects_yandex():
+    conv = _hypertube_conv(customer_text="не работает в яндекс браузере")
+    assert _apply_hypertube_fixed_subcategory_rules("Расширение", conv) == "Расширение Яндекс"
+
+
+def test_hypertube_rules_detects_tv():
+    conv = _hypertube_conv(customer_text="не работает на телевизоре")
+    assert _apply_hypertube_fixed_subcategory_rules("Другое", conv) == "TV/приставка"
+
+
+def test_hypertube_rules_detects_android():
+    conv = _hypertube_conv(customer_text="не работает на андроид")
+    assert _apply_hypertube_fixed_subcategory_rules("Приложение", conv) == "Android-приложение"
+
+
+def test_hypertube_rules_detects_windows():
+    conv = _hypertube_conv(customer_text="не работает на компьютере")
+    assert _apply_hypertube_fixed_subcategory_rules("Другое", conv) == "Windows-приложение"
+
+
+def test_hypertube_rules_keeps_unknown_without_markers():
+    conv = _hypertube_conv(customer_text="просто спасибо")
+    assert _apply_hypertube_fixed_subcategory_rules("Благодарность", conv) == "Благодарность"
+
+
+def test_hypertube_fixed_subcategories_list_has_seven_items():
+    assert len(HYPERTUBE_FIXED_SUBCATEGORIES) == 7
+    assert "Отмены" in HYPERTUBE_FIXED_SUBCATEGORIES
+    assert "Расширение Chrome" in HYPERTUBE_FIXED_SUBCATEGORIES
+    assert "TV/приставка" in HYPERTUBE_FIXED_SUBCATEGORIES
+
+
+def test_merge_agents_results_applies_hypertube_fixed_subcategory_rules(tmp_path):
+    week = _write_conversations(tmp_path / "last_week", ["a", "b", "c"])
+    day = _write_conversations(tmp_path / "last_day", ["a"])
+    out = tmp_path / "support-analysis"
+    manifest = prepare_agents_bundle(week, day, out, workers=2, service_id="hypertube")
+
+    for entry in manifest["chunks"]:
+        chunk = json.loads(Path(entry["chunk_path"]).read_text(encoding="utf-8"))
+        items = []
+        for conv in chunk["conversations"]:
+            if conv["id"] == "a":
+                items.append({
+                    "id": "a", "category": "Оплата и подписка",
+                    "subcategory": "Chrome", "problem_summary": "—",
+                    "severity": None, "severity_reason": "—",
+                    "confidence": "high", "evidence": "",
+                })
+            elif conv["id"] == "b":
+                items.append({
+                    "id": "b", "category": "Приложение",
+                    "subcategory": "Андроид", "problem_summary": "—",
+                    "severity": None, "severity_reason": "—",
+                    "confidence": "high", "evidence": "",
+                })
+            else:
+                items.append({
+                    "id": conv["id"], "category": "Прочие обращения",
+                    "subcategory": "—", "problem_summary": "—",
+                    "severity": None, "severity_reason": "—",
+                    "confidence": "low", "evidence": "",
+                })
+        Path(entry["result_path"]).write_text(
+            json.dumps({"classifications": items}, ensure_ascii=False), encoding="utf-8")
+
+    outcome = merge_agents_results(week, day, out, service_id="hypertube")
+
+    result = json.loads(Path(outcome["result_path"]).read_text(encoding="utf-8"))
+    by_id = {item["id"]: item for item in result["classifications"]}
+    assert by_id["a"]["subcategory"] == "Расширение Chrome"
+    assert by_id["b"]["subcategory"] == "Android-приложение"
