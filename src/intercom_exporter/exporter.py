@@ -4,11 +4,25 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from .dates import DateRange
-from .storage import JsonlStore
+from .activity import has_meaningful_activity
+from .dates import DateRange, DateTimeRange, run_dir_name
+from .storage import JsonStore
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_timezone(timezone_name: str):
+    normalized = timezone_name.strip()
+    if normalized.casefold() == "unix":
+        return None
+    if normalized.casefold() == "utc":
+        return timezone.utc
+    try:
+        return ZoneInfo(normalized)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValueError(f"Неизвестный часовой пояс: {timezone_name}") from exc
 
 
 def format_duration(seconds: float) -> str:
@@ -25,17 +39,46 @@ class ConversationExporter:
         self.client = client
         self.max_workers = max_workers
 
-    def run(self, date_range: DateRange, output_root: str | Path, *, api_version: str = "unknown",
-            selection: str = "all", fields: str = "important") -> dict[str, Any]:
+    @staticmethod
+    def _create_output_dir(output_root: str | Path, date_range: DateRange | DateTimeRange,
+                           started_at: datetime) -> Path:
+        root = Path(output_root)
+        root.mkdir(parents=True, exist_ok=True)
+        if isinstance(date_range, DateTimeRange):
+            base_name = run_dir_name(started_at)
+        else:
+            base_name = date_range.slug
+        output_dir = root / base_name
+        try:
+            output_dir.mkdir()
+            return output_dir
+        except FileExistsError:
+            run_stamp = started_at.strftime("%Y%m%dT%H%M%S.%fZ")
+            unique_name = f"{base_name}_run_{run_stamp}"
+            output_dir = root / unique_name
+            suffix = 1
+            while True:
+                try:
+                    output_dir.mkdir()
+                    return output_dir
+                except FileExistsError:
+                    output_dir = root / f"{unique_name}_{suffix:02d}"
+                    suffix += 1
+
+    def run(self, date_range: DateRange | DateTimeRange, output_root: str | Path, *, api_version: str = "unknown",
+            selection: str = "all", fields: str = "important", timezone_name: str = "UTC") -> dict[str, Any]:
         if selection not in {"new", "updated", "all"}:
             raise ValueError("selection должен быть new, updated или all")
         if fields not in {"important", "all"}:
             raise ValueError("fields должен быть important или all")
-        output_dir = Path(output_root) / f"{date_range.start.isoformat()}_{date_range.end.isoformat()}"
-        store = JsonlStore(output_dir / "conversations.jsonl")
-        found = exported = errors = 0
+        target_timezone = resolve_timezone(timezone_name)
+        timezone_label = "unix" if target_timezone is None else timezone_name
         started_monotonic = time.perf_counter()
-        started_at = datetime.now(timezone.utc).isoformat()
+        started_at_time = datetime.now(timezone.utc)
+        output_dir = self._create_output_dir(output_root, date_range, started_at_time)
+        store = JsonStore(output_dir / "conversations.json")
+        found = exported = errors = 0
+        started_at = started_at_time.isoformat()
         limitations: list[str] = []
         seen_ids: set[str] = set()
 
@@ -91,23 +134,24 @@ class ConversationExporter:
                                 available_count = len(parts) + (1 if detail.get("source") else 0)
                                 truncated = expected_parts > available_count or response_part_count > len(parts)
 
-                                part_matches = any(
-                                    isinstance(part, dict) and in_period(part.get("created_at"))
-                                    for part in parts
-                                )
                                 created_at = candidate.get("created_at", detail.get("created_at"))
+                                conv_for_check = {
+                                    "created_at": created_at if created_at is not None else detail.get("created_at"),
+                                    "conversation_parts": parts,
+                                }
+                                start_epoch, end_epoch = date_range.epoch_bounds()
                                 created_matches = in_period(created_at) or in_period(detail.get("created_at"))
-                                updated_matches = in_period(candidate.get("updated_at")) or in_period(detail.get("updated_at"))
+                                meaningful = has_meaningful_activity(conv_for_check, start_epoch, end_epoch)
                                 if selection == "new":
                                     selected = created_matches
                                 elif selection == "updated":
                                     try:
-                                        is_old = created_at is not None and int(created_at) < date_range.epoch_bounds()[0]
+                                        is_old = created_at is not None and int(created_at) < start_epoch
                                     except (TypeError, ValueError, OverflowError):
                                         is_old = False
-                                    selected = is_old and (updated_matches or part_matches)
+                                    selected = is_old and meaningful
                                 else:
-                                    selected = created_matches or updated_matches or part_matches
+                                    selected = created_matches or meaningful
                                 if not selected:
                                     if truncated and selection != "new" and not created_matches:
                                         known_count = max(expected_parts, response_part_count + (1 if detail.get("source") else 0))
@@ -122,7 +166,8 @@ class ConversationExporter:
 
                                 found += 1
                                 exported += 1
-                                yield self._normalize(detail, parts, fields=fields)
+                                yield self._normalize(detail, parts, fields=fields,
+                                                      target_timezone=target_timezone)
                             except Exception as exc:
                                 errors += 1
                                 limitations.append(f"Не удалось получить полную историю одного обращения ({type(exc).__name__}).")
@@ -142,6 +187,7 @@ class ConversationExporter:
             "api_version": api_version,
             "selection": selection,
             "fields": fields,
+            "timezone": timezone_label,
             "found_count": found,
             "exported_count": exported,
             "error_count": errors,
@@ -153,7 +199,8 @@ class ConversationExporter:
         return {**manifest, "output_dir": str(output_dir)}
 
     @staticmethod
-    def _normalize(conversation: dict, parts: list, *, fields: str = "all") -> dict:
+    def _normalize(conversation: dict, parts: list, *, fields: str = "all",
+                   target_timezone: Any = timezone.utc) -> dict:
         if fields == "important":
             result = {
                 key: conversation[key]
@@ -171,84 +218,30 @@ class ConversationExporter:
                 }
                 for part in parts if isinstance(part, dict)
             ]
-            return ConversationExporter._convert_timestamps_to_utc(result)
+            return ConversationExporter._convert_timestamps(result, target_timezone)
 
-        result: dict[str, Any] = {}
-        for field in ("id", "type", "title", "created_at", "updated_at", "state", "open", "read", "priority",
-                      "waiting_since", "snoozed_until", "admin_assignee_id", "team_assignee_id", "tags", "custom_attributes"):
-            if field in conversation:
-                result[field] = conversation[field]
-        statistics = conversation.get("statistics")
-        if isinstance(statistics, dict):
-            result["statistics"] = {
-                key: statistics[key]
-                for key in ("last_close_at", "count_conversation_parts")
-                if key in statistics
-            }
-        source = conversation.get("source")
-        if isinstance(source, dict):
-            attachment_fields = ("name", "url", "type", "content_type", "filesize")
-            source_fields = {key: source[key] for key in ("type", "id", "delivered_as", "subject", "body", "url", "redacted") if key in source}
-            author = source.get("author")
-            if isinstance(author, dict):
-                source_fields["author"] = {key: author[key] for key in ("id", "type", "name") if key in author}
-            attachments = source.get("attachments")
-            if isinstance(attachments, list):
-                source_fields["attachments"] = [
-                    {key: attachment[key] for key in attachment_fields if key in attachment}
-                    for attachment in attachments if isinstance(attachment, dict)
-                ]
-            if source_fields:
-                result["source"] = source_fields
-        contacts = conversation.get("contacts")
-        if isinstance(contacts, dict):
-            contact_items = contacts.get("contacts")
-            if isinstance(contact_items, list):
-                result["contacts"] = {
-                    "type": contacts.get("type"),
-                    "contacts": [
-                        {key: contact[key] for key in ("id", "type") if key in contact}
-                        for contact in contact_items if isinstance(contact, dict)
-                    ],
-                }
-        normalized_parts = []
-        part_fields = (
-            "id", "part_type", "created_at", "updated_at", "notified_at", "type", "body",
-            "redacted", "assigned_to", "admin_assignee_id", "team_assignee_id", "external_id",
-            "state", "metadata", "tags", "event_details", "app_package_code", "translations",
-        )
-        attachment_fields = ("name", "url", "type", "content_type", "filesize")
-        for part in parts:
-            if not isinstance(part, dict):
-                continue
-            item = {key: part[key] for key in part_fields if key in part}
-            author = part.get("author")
-            if isinstance(author, dict):
-                item["author"] = {key: author[key] for key in ("id", "type", "name") if key in author}
-            attachments = part.get("attachments")
-            if isinstance(attachments, list):
-                item["attachments"] = [
-                    {key: attachment[key] for key in attachment_fields if key in attachment}
-                    for attachment in attachments if isinstance(attachment, dict)
-                ]
-            normalized_parts.append(item)
-        result["conversation_parts"] = normalized_parts
-        return ConversationExporter._convert_timestamps_to_utc(result)
+        return ConversationExporter._convert_timestamps(conversation, target_timezone)
 
     @staticmethod
-    def _convert_timestamps_to_utc(value: Any, field_name: str | None = None) -> Any:
+    def _convert_timestamps(value: Any, target_timezone: Any,
+                            field_name: str | None = None) -> Any:
         if isinstance(value, dict):
             return {
-                key: ConversationExporter._convert_timestamps_to_utc(item, key)
+                key: ConversationExporter._convert_timestamps(item, target_timezone, key)
                 for key, item in value.items()
             }
         if isinstance(value, list):
-            return [ConversationExporter._convert_timestamps_to_utc(item) for item in value]
+            return [ConversationExporter._convert_timestamps(item, target_timezone) for item in value]
         if (
-            field_name is not None
+            target_timezone is not None
+            and field_name is not None
             and (field_name.endswith(("_at", "_until")) or field_name == "waiting_since")
             and isinstance(value, (int, float))
             and not isinstance(value, bool)
         ):
-            return datetime.fromtimestamp(value, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+            converted = datetime.fromtimestamp(value, timezone.utc).astimezone(target_timezone)
+            rendered = converted.isoformat(timespec="seconds")
+            if converted.utcoffset() == timezone.utc.utcoffset(converted):
+                return rendered.replace("+00:00", "Z")
+            return rendered
         return value

@@ -87,12 +87,17 @@ class IntercomClient:
                     pass
         return min(2 ** attempt, 60)
 
-    def search_conversations(self, start: date, end: date) -> Iterator[dict[str, Any]]:
-        start_dt = datetime(start.year, start.month, start.day, tzinfo=timezone.utc)
-        end_dt = datetime(end.year, end.month, end.day, tzinfo=timezone.utc)
-        start_epoch = int(start_dt.timestamp())
-        end_epoch = int(end_dt.timestamp())
-        created_before_end = {"field": "created_at", "operator": "<", "value": str(end_epoch - 1)}
+    @staticmethod
+    def _epoch(value: date | datetime) -> int:
+        if isinstance(value, datetime):
+            moment = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+            return int(moment.astimezone(timezone.utc).timestamp())
+        return int(datetime(value.year, value.month, value.day, tzinfo=timezone.utc).timestamp())
+
+    def search_conversations(self, start: date | datetime, end: date | datetime) -> Iterator[dict[str, Any]]:
+        start_epoch = self._epoch(start)
+        end_epoch = self._epoch(end)
+        created_before_end = {"field": "created_at", "operator": "<", "value": str(end_epoch)}
         payload: dict[str, Any] = {
             "query": {
                 "operator": "OR",
@@ -100,7 +105,7 @@ class IntercomClient:
                     {
                         "operator": "AND",
                         "value": [
-                            {"field": "created_at", "operator": ">", "value": str(start_epoch)},
+                            {"field": "created_at", "operator": ">", "value": str(start_epoch - 1)},
                             created_before_end,
                         ],
                     },
@@ -109,7 +114,7 @@ class IntercomClient:
                         "value": [
                             created_before_end,
                             # Keep later-updated candidates: their conversation parts may fall in the requested period.
-                            {"field": "updated_at", "operator": ">", "value": str(start_epoch)},
+                            {"field": "updated_at", "operator": ">", "value": str(start_epoch - 1)},
                         ],
                     },
                 ],

@@ -1,4 +1,3 @@
-from calendar import monthrange
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 
@@ -21,6 +20,44 @@ class DateRange:
         start, end = self.epoch_bounds()
         return start <= int(epoch_seconds) < end
 
+    @property
+    def slug(self) -> str:
+        return f"{self.start.isoformat()}_{self.end.isoformat()}"
+
+
+def _ensure_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+@dataclass(frozen=True)
+class DateTimeRange:
+    """Скользящий период с точностью до секунды; границы хранятся в UTC."""
+
+    start: datetime
+    end: datetime
+
+    def __post_init__(self):
+        start = _ensure_utc(self.start)
+        end = _ensure_utc(self.end)
+        object.__setattr__(self, "start", start)
+        object.__setattr__(self, "end", end)
+        if end <= start:
+            raise ValueError("Момент окончания должен быть позже момента начала")
+
+    def epoch_bounds(self) -> tuple[int, int]:
+        return int(self.start.timestamp()), int(self.end.timestamp())
+
+    def contains(self, epoch_seconds: int) -> bool:
+        start, end = self.epoch_bounds()
+        return start <= int(epoch_seconds) < end
+
+    @property
+    def slug(self) -> str:
+        stamp = "%Y%m%dT%H%M%SZ"
+        return f"{self.start.strftime(stamp)}_{self.end.strftime(stamp)}"
+
 
 def parse_date_range(start: str | None, end: str | None) -> DateRange:
     if (start is None) != (end is None):
@@ -37,14 +74,13 @@ def parse_date_range(start: str | None, end: str | None) -> DateRange:
     return DateRange(parsed_start, parsed_end)
 
 
-def default_range(now: datetime | None = None) -> DateRange:
+def run_dir_name(now: datetime | None = None) -> str:
+    """Имя папки прогона: дата и время создания в UTC, DD_MM_YYYY_HH_MM."""
+    current = _ensure_utc(now or datetime.now(timezone.utc))
+    return current.strftime("%d_%m_%Y_%H_%M")
+
+
+def default_range(now: datetime | None = None) -> DateTimeRange:
+    """Скользящая неделя: ровно последние 7 * 24 часа от момента запуска (UTC)."""
     current = now or datetime.now(timezone.utc)
-    current = current.astimezone(timezone.utc) if current.tzinfo else current.replace(tzinfo=timezone.utc)
-    today = current.date()
-    month_index = today.year * 12 + today.month - 1 - 3
-    start_year, start_month_index = divmod(month_index, 12)
-    start_month = start_month_index + 1
-    start_day = min(today.day, monthrange(start_year, start_month)[1])
-    start = date(start_year, start_month, start_day)
-    end = today + timedelta(days=1)
-    return DateRange(start, end)
+    return DateTimeRange(current - timedelta(days=7), current)

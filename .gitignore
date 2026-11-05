@@ -14,4 +14,8 @@ logs/
 .idea/
 data/*
 !data/.gitkeep
+.openrouter-cache/
 /.worktrees/
+.kimi/
+.mcp.json
+CLAUDE.md
