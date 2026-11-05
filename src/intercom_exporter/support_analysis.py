@@ -960,6 +960,7 @@ def main(argv: list[str] | None = None) -> int:
                     taxonomy=taxonomy,
                     taxonomy_source=taxonomy_source,
                     billing_category=get_billing_category(service.id),
+                    service_id=service.id,
                 )
                 print(
                     f"{service.label}: слито {result['unique_conversation_count']} классификаций. "
@@ -1016,6 +1017,7 @@ def main(argv: list[str] | None = None) -> int:
                         workers=args.workers if args.workers is not None else load_agent_workers(),
                         taxonomy=taxonomy,
                         taxonomy_source=f"{service.id}_v1",
+                        service_id=service.id,
                     )
                     print(
                         f"{service.label}: пакет оркестрации субагентов готов: {bundle['workers']} чанков. "
@@ -1040,6 +1042,7 @@ def main(argv: list[str] | None = None) -> int:
                     taxonomy=taxonomy,
                     taxonomy_source=manifest.get("taxonomy_source", f"{service.id}_v1"),
                     billing_category=get_billing_category(service.id),
+                    service_id=service.id,
                 )
                 print(
                     f"{service.label}: слито {result['unique_conversation_count']} классификаций. "

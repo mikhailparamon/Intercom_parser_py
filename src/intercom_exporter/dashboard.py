@@ -10,7 +10,7 @@ from html import escape as _esc
 from pathlib import Path
 from typing import Any
 
-from .agents_orchestration import BILLING_CATEGORY
+from .agents_orchestration import BILLING_CATEGORY, FIXED_SUBCATEGORIES
 from .services import SERVICES
 from .support_analysis import _write_text
 
@@ -103,6 +103,8 @@ def build_dashboard_data(
     day_classifications = [item for item in classifications if item["id"] in day_ids]
     week_categories = _category_breakdown(week_classifications)
     subcategory_counts = Counter(item["subcategory"] for item in week_classifications)
+    if fixed_subcategories is None:
+        fixed_subcategories = FIXED_SUBCATEGORIES
     if fixed_subcategories:
         fixed = {name: subcategory_counts.get(name, 0) for name in fixed_subcategories}
         free_sorted = sorted(

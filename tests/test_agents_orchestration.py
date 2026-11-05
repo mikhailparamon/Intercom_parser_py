@@ -4,10 +4,14 @@ from pathlib import Path
 import pytest
 
 from intercom_exporter.agents_orchestration import (
+    FIXED_SUBCATEGORIES,
     HYPERTUBE_FIXED_SUBCATEGORIES,
     TAXONOMY,
+    _apply_fixed_subcategory_rules,
     _apply_hypertube_fixed_subcategory_rules,
+    _conversation_text,
     _normalize_hypertube_subcategory,
+    _normalize_subcategory,
     merge_agents_results,
     prepare_agents_bundle,
 )
@@ -409,13 +413,129 @@ def test_cli_research_merges_and_builds_dashboard(tmp_path, monkeypatch):
     assert result["recommendations"] == ["Совет"]
 
 
-def _hypertube_conv(customer_text="", operator_text=""):
+def _conv(customer_text="", operator_text=""):
     messages = []
     if customer_text:
         messages.append({"role": "customer", "text": customer_text})
     if operator_text:
         messages.append({"role": "operator", "text": operator_text})
     return {"id": "1", "title": "", "messages": messages}
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ('Тариф "Для документов"', 'Тариф "Для документов"'),
+    ("IOS", "iOS-приложение"),
+    ("Iphone", "iOS-приложение"),
+    ("айфон", "iOS-приложение"),
+    ("Айпад", "iOS-приложение"),
+    ("Отмена подписки", "Отмены"),
+    ("отменить", "Отмены"),
+    ("Андроид", "Android-приложение"),
+    ("Android app", "Android-приложение"),
+    ("Приложение на ПК", "Windows-приложение"),
+    ("windows", "Windows-приложение"),
+    ("Виндовс", "Windows-приложение"),
+    ("Браузерное расширение", "Расширение"),
+    ("Extension", "Расширение"),
+])
+def test_normalize_subcategory_maps_variants(raw, expected):
+    assert _normalize_subcategory(raw) == expected
+
+
+def test_apply_rules_prioritizes_document_tariff_over_cancel():
+    conv = _conv(
+        customer_text="хочу отменить подписку",
+        operator_text='У вас тариф "Для документов", приложение работает только на тарифах "Для Видео" и "Персональный"',
+    )
+    assert _apply_fixed_subcategory_rules("Отмена подписки", conv) == 'Тариф "Для документов"'
+
+
+def test_apply_rules_prioritizes_cancel_over_ios():
+    conv = _conv(customer_text="хочу отменить подписку, у меня iPhone")
+    assert _apply_fixed_subcategory_rules("iOS-приложение", conv) == "Отмены"
+
+
+def test_apply_rules_detects_cancel_in_non_billing_category():
+    conv = _conv(customer_text="отмените подписку, VPN не подключается")
+    assert _apply_fixed_subcategory_rules("Не подключается", conv) == "Отмены"
+
+
+def test_apply_rules_detects_platform_markers():
+    assert _apply_fixed_subcategory_rules("Другое", _conv(customer_text="не работает на айфоне")) == "iOS-приложение"
+    assert _apply_fixed_subcategory_rules("Другое", _conv(customer_text="андроид не подключается")) == "Android-приложение"
+    assert _apply_fixed_subcategory_rules("Другое", _conv(customer_text="приложение на ПК не запускается")) == "Windows-приложение"
+    assert _apply_fixed_subcategory_rules("Другое", _conv(customer_text="не работает расширение в браузере")) == "Расширение"
+
+
+def test_apply_rules_keeps_unknown_subcategory_without_markers():
+    conv = _conv(customer_text="просто спасибо")
+    assert _apply_fixed_subcategory_rules("Благодарность", conv) == "Благодарность"
+
+
+def test_apply_rules_detects_document_tariff_by_admin_marker():
+    conv = _conv(
+        customer_text="подписка неактивна",
+        operator_text='Для документов не предусмотрено приложение, используйте OpenVPN Connect',
+    )
+    assert _apply_fixed_subcategory_rules("Оплата не распознана", conv) == 'Тариф "Для документов"'
+
+
+def test_fixed_subcategories_list_has_six_items():
+    assert len(FIXED_SUBCATEGORIES) == 6
+    assert 'Тариф "Для документов"' in FIXED_SUBCATEGORIES
+    assert "Отмены" in FIXED_SUBCATEGORIES
+
+
+def test_merge_agents_results_applies_fixed_subcategory_rules(tmp_path):
+    week = _write_conversations(tmp_path / "last_week", ["a", "b", "c"])
+    day = _write_conversations(tmp_path / "last_day", ["a"])
+    out = tmp_path / "support-analysis"
+    manifest = prepare_agents_bundle(week, day, out, workers=2)
+
+    # Заполняем result с вариантами написания, которые должны нормализоваться
+    for entry in manifest["chunks"]:
+        chunk = json.loads(Path(entry["chunk_path"]).read_text(encoding="utf-8"))
+        items = []
+        for conv in chunk["conversations"]:
+            if conv["id"] == "a":
+                items.append({
+                    "id": "a", "category": "Оплата и управление подпиской",
+                    "subcategory": "IOS", "problem_summary": "—",
+                    "severity": None, "severity_reason": "—",
+                    "confidence": "high", "evidence": "",
+                })
+            elif conv["id"] == "b":
+                items.append({
+                    "id": "b", "category": "Проблемы подключения VPN",
+                    "subcategory": "Айфон", "problem_summary": "—",
+                    "severity": None, "severity_reason": "—",
+                    "confidence": "high", "evidence": "",
+                })
+            else:
+                items.append({
+                    "id": conv["id"], "category": "Прочие обращения",
+                    "subcategory": "—", "problem_summary": "—",
+                    "severity": None, "severity_reason": "—",
+                    "confidence": "low", "evidence": "",
+                })
+        Path(entry["result_path"]).write_text(
+            json.dumps({"classifications": items}, ensure_ascii=False), encoding="utf-8")
+
+    outcome = merge_agents_results(week, day, out)
+
+    result = json.loads(Path(outcome["result_path"]).read_text(encoding="utf-8"))
+    by_id = {item["id"]: item for item in result["classifications"]}
+    assert by_id["a"]["subcategory"] == "iOS-приложение"
+    assert by_id["b"]["subcategory"] == "iOS-приложение"
+
+
+def _hypertube_conv(customer_text="", operator_text=""):
+    messages = []
+    if customer_text:
+        messages.append({"role": "customer", "text": customer_text})
+    if operator_text:
+        messages.append({"role": "operator", "text": operator_text})
+    return {"title": "", "messages": messages}
 
 
 @pytest.mark.parametrize("raw,expected", [

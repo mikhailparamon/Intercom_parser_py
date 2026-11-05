@@ -313,9 +313,9 @@ python analyze_support.py notify-slack
 ```
 data/
   <DD_MM_YYYY_HH_MM>/
-    vpn/
+    VPNnaoborot/
       last_week/ last_day/ support-analysis/
-    hypertube/
+    Hypertube/
       last_week/ last_day/ support-analysis/
     dashboard_DD_MM_YYYY.html   # общий дашборд с вкладками
     dashboard_DD_MM_YYYY.json   # данные обоих сервисов
@@ -329,7 +329,7 @@ data/
 
 1. Добавьте `HYPERTUBE_INTERCOM_ACCESS_TOKEN` в `.env`.
 2. Запустите выгрузку: `python main.py --service hypertube --skip-analysis` (пакет субагентов не создаётся без таксономии).
-3. Агент прочитает выборку обращений из `data/<stamp>/hypertube/last_week/conversations.json` и предложит список категорий.
+3. Агент прочитает выборку обращений из `data/<stamp>/Hypertube/last_week/conversations.json` и предложит список категорий.
 4. После вашего утверждения категории запишутся в `HYPERTUBE_TAXONOMY` в `src/intercom_exporter/agents_orchestration.py`, и HyperTube начнёт классифицироваться в общем цикле.
 
 Размер пакетов ограничивает нагрузку на контекст, но для наборов до 10 000 записей потребуется много API-запросов; их доступность зависит от лимитов модели и аккаунта, а платные модели тарифицируют каждый пакет и итоговый синтез. Временные ошибки сети и HTTP 408/429/5xx повторяются с задержкой; пустой ответ сопровождается причиной завершения генерации, моделью и числом выходных токенов, если провайдер их вернул. Если отдельное обращение превышает безопасный лимит 750 КБ, API-анализ останавливается, а входы остаются для ручной обработки. При ошибке API или неполном ответе отчёт не создаётся. Локальная проверка сверяет число обращений, все ID и fingerprint исходного набора.
