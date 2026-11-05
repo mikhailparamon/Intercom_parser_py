@@ -316,11 +316,21 @@ def test_subcategories_fill_remaining_slots_with_free():
     assert "Редкая свободная" in names
 
 
-def test_subcategories_order_keeps_fixed_first():
-    rows = [{"id": "c1", "created_at": "2026-10-26T09:00:00Z", "updated_at": "2026-10-26T10:00:00Z"}]
-    classifications = [_classification("c1", "Подключение VPN", FIXED_SUBCATEGORIES[-1], None)]
+def test_subcategories_sorted_by_count_desc():
+    rows = [{"id": f"c{i}", "created_at": "2026-10-26T09:00:00Z", "updated_at": "2026-10-26T10:00:00Z"}
+            for i in range(4)]
+    classifications = [
+        _classification("c0", "Подключение VPN", FIXED_SUBCATEGORIES[0], None),   # 1
+        _classification("c1", "Подключение VPN", FIXED_SUBCATEGORIES[-1], None),  # 1
+        _classification("c2", "Подключение VPN", "Популярная свободная", None),
+        _classification("c3", "Подключение VPN", "Популярная свободная", None),
+    ]
 
     data = build_dashboard_data(rows, rows, CATEGORIES, classifications, "w", "d")
 
+    counts = [item["count"] for item in data["subcategories"]]
+    assert counts == sorted(counts, reverse=True)
     names = [item["name"] for item in data["subcategories"]]
-    assert names[:len(FIXED_SUBCATEGORIES)] == FIXED_SUBCATEGORIES
+    assert "Популярная свободная" in names
+    for fixed in FIXED_SUBCATEGORIES:
+        assert fixed in names

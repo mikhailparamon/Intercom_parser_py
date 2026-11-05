@@ -107,7 +107,10 @@ def build_dashboard_data(
     fixed_items = [(name, fixed[name]) for name in FIXED_SUBCATEGORIES]
     subcategories = [
         {"name": name, "count": count}
-        for name, count in (fixed_items + free_top)
+        for name, count in sorted(
+            fixed_items + free_top,
+            key=lambda item: (-item[1], item[0].casefold()),
+        )
     ]
     severity_week = _severity_breakdown(week_classifications)
     high_cases_all = [
