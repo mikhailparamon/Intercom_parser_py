@@ -1,5 +1,6 @@
 import json
 
+from intercom_exporter.agents_orchestration import FIXED_SUBCATEGORIES
 from intercom_exporter.dashboard import build_dashboard_data, render_dashboard_html, write_dashboard
 from intercom_exporter.support_analysis import _build_payload, generate_monitoring_report
 
@@ -55,7 +56,7 @@ def test_build_dashboard_data_counts_windows_categories_and_severity():
     assert data["day_categories"] == [{"name": "Подключение VPN", "count": 1, "share": 100.0}]
     assert data["severity"]["week"] == {"high": 1, "medium": 1, "low": 0, "unknown": 1}
     assert data["severity"]["day"] == {"high": 0, "medium": 0, "low": 0, "unknown": 1}
-    assert data["subcategories"][0] == {"name": "Не подключается", "count": 2}
+    assert {"name": "Не подключается", "count": 2} in data["subcategories"]
     assert [case["id"] for case in data["high_cases"]] == ["w1"]
     assert data["week"]["period_label"] == "week label"
     assert data["day"]["period_label"] == "day label"
@@ -278,3 +279,58 @@ def test_high_cases_list_day_window_first():
     data = build_dashboard_data(week_rows, day_rows, CATEGORIES, classifications, "w", "d")
 
     assert [case["id"] for case in data["high_cases"]] == ["d_new", "w_old"]
+
+
+def test_subcategories_always_include_fixed_six():
+    classifications = [
+        _classification("w1", "Подключение VPN", "Не подключается", None),
+    ]
+
+    data = build_dashboard_data(_week_rows(), _day_rows(), CATEGORIES, classifications, "w", "d")
+
+    names = [item["name"] for item in data["subcategories"]]
+    for fixed in FIXED_SUBCATEGORIES:
+        assert fixed in names, f"{fixed!r} должен быть в топ-10 подкатегорий"
+    assert {"name": "Не подключается", "count": 1} in data["subcategories"]
+
+
+def test_subcategories_fill_remaining_slots_with_free():
+    rows = [{"id": f"c{i}", "created_at": "2026-10-26T09:00:00Z", "updated_at": "2026-10-26T10:00:00Z"}
+            for i in range(30)]
+    classifications = (
+        [_classification(f"c{i}", "Подключение VPN", "Не подключается", None) for i in range(5)]
+        + [_classification(f"c{i}", "Оплата", "Карта отклонена", None) for i in range(5, 10)]
+        + [_classification(f"c{i}", "Оплата", "Медленный возврат", None) for i in range(10, 15)]
+        + [_classification(f"c{i}", "Оплата", "Сбой списания", None) for i in range(15, 20)]
+        + [_classification(f"c{i}", "Оплата", FIXED_SUBCATEGORIES[0], None) for i in range(20, 25)]
+        + [_classification(f"c{i}", "Оплата", "Редкая свободная", None) for i in range(25, 30)]
+    )
+
+    data = build_dashboard_data(rows, rows, CATEGORIES, classifications, "w", "d")
+
+    names = [item["name"] for item in data["subcategories"]]
+    assert len(names) == 10
+    for fixed in FIXED_SUBCATEGORIES:
+        assert fixed in names
+    assert "Карта отклонена" in names
+    assert "Редкая свободная" in names
+
+
+def test_subcategories_sorted_by_count_desc():
+    rows = [{"id": f"c{i}", "created_at": "2026-10-26T09:00:00Z", "updated_at": "2026-10-26T10:00:00Z"}
+            for i in range(4)]
+    classifications = [
+        _classification("c0", "Подключение VPN", FIXED_SUBCATEGORIES[0], None),   # 1
+        _classification("c1", "Подключение VPN", FIXED_SUBCATEGORIES[-1], None),  # 1
+        _classification("c2", "Подключение VPN", "Популярная свободная", None),
+        _classification("c3", "Подключение VPN", "Популярная свободная", None),
+    ]
+
+    data = build_dashboard_data(rows, rows, CATEGORIES, classifications, "w", "d")
+
+    counts = [item["count"] for item in data["subcategories"]]
+    assert counts == sorted(counts, reverse=True)
+    names = [item["name"] for item in data["subcategories"]]
+    assert "Популярная свободная" in names
+    for fixed in FIXED_SUBCATEGORIES:
+        assert fixed in names

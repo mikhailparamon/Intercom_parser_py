@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from .agents_orchestration import BILLING_CATEGORY
+from .agents_orchestration import BILLING_CATEGORY, FIXED_SUBCATEGORIES
 from .support_analysis import _write_text
 
 PALETTE = [
@@ -98,9 +98,19 @@ def build_dashboard_data(
     day_classifications = [item for item in classifications if item["id"] in day_ids]
     week_categories = _category_breakdown(week_classifications)
     subcategory_counts = Counter(item["subcategory"] for item in week_classifications)
+    fixed = {name: subcategory_counts.get(name, 0) for name in FIXED_SUBCATEGORIES}
+    free_sorted = sorted(
+        ((name, count) for name, count in subcategory_counts.items() if name not in FIXED_SUBCATEGORIES),
+        key=lambda item: (-item[1], item[0].casefold()),
+    )
+    free_top = free_sorted[:max(10 - len(FIXED_SUBCATEGORIES), 0)]
+    fixed_items = [(name, fixed[name]) for name in FIXED_SUBCATEGORIES]
     subcategories = [
         {"name": name, "count": count}
-        for name, count in sorted(subcategory_counts.items(), key=lambda item: (-item[1], item[0].casefold()))[:10]
+        for name, count in sorted(
+            fixed_items + free_top,
+            key=lambda item: (-item[1], item[0].casefold()),
+        )
     ]
     severity_week = _severity_breakdown(week_classifications)
     high_cases_all = [

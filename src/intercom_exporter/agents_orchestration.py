@@ -57,6 +57,17 @@ TAXONOMY = [
 BILLING_CATEGORY = "Оплата и управление подпиской"
 assert any(item["name"] == BILLING_CATEGORY for item in TAXONOMY), "BILLING_CATEGORY должна быть в TAXONOMY"
 
+# Фиксированные подкатегории, которые всегда присутствуют в дашборде.
+# Источник истины — раздел 3 шаблона support_analysis_prompt_template.md.
+FIXED_SUBCATEGORIES = [
+    'Тариф "Для документов"',
+    "Отмены",
+    "iOS-приложение",
+    "Android-приложение",
+    "Windows-приложение",
+    "Расширение",
+]
+
 
 def prepare_agents_bundle(
     week_input_path: str | Path,
@@ -135,6 +146,134 @@ def _normalized_classification(item: dict) -> dict:
         "confidence": item["confidence"],
         "evidence": str(item.get("evidence") or ""),
     }
+
+
+def _conversation_text(conversation: dict | None, roles: tuple[str, ...] = ("customer",)) -> str:
+    """Возвращает склеенный текст сообщений разговора, фильтруя по ролям."""
+    if not conversation:
+        return ""
+    parts = [conversation.get("title", "")]
+    for message in conversation.get("messages", []):
+        if message.get("role") in roles:
+            parts.append(message.get("text", ""))
+    return " ".join(part for part in parts if part)
+
+
+def _normalize_subcategory(value: str) -> str:
+    """Приводит известные варианты написания подкатегорий к каноническим именам."""
+    lowered = value.lower().strip().strip('"').strip("'").replace("—", "-")
+    if lowered in ("", "-", "нет"):
+        return value
+    if "для документов" in lowered or lowered in ("документы", "тариф документы"):
+        return 'Тариф "Для документов"'
+    if lowered.startswith("отмен") or "отпис" in lowered or "cancel" in lowered:
+        return "Отмены"
+    if any(token in lowered for token in ("ios", "iphone", "ipad", "айфон", "айпад")):
+        return "iOS-приложение"
+    if any(token in lowered for token in ("android", "андроид")):
+        return "Android-приложение"
+    if any(token in lowered for token in ("windows", "виндовс")):
+        return "Windows-приложение"
+    if "приложение" in lowered and ("пк" in lowered or "десктоп" in lowered):
+        return "Windows-приложение"
+    if "расширение" in lowered or "extension" in lowered:
+        return "Расширение"
+    return value
+
+
+def _is_document_tariff(text: str) -> bool:
+    """Маркеры ограничения тарифа «Для документов» в переписке (user + admin)."""
+    lowered = text.lower()
+    if "для документов" in lowered and ("для видео" in lowered or "персональн" in lowered):
+        return True
+    if "не предусмотрен тарифом" in lowered:
+        return True
+    if "альтернативн" in lowered and "openvpn" in lowered:
+        return True
+    payment_marker = any(
+        token in lowered
+        for token in ("подписка неактивна", "не активна подписка", "просит оплатить")
+    )
+    app_marker = any(
+        token in lowered
+        for token in ("приложени", "десктоп", "openvpn")
+    )
+    return payment_marker and app_marker
+
+
+def _is_cancel(text: str) -> bool:
+    lowered = text.lower()
+    return any(
+        token in lowered
+        for token in (
+            "отменить подписку",
+            "отмена подписки",
+            "отмените подписку",
+            "отмени подписку",
+            "отписаться",
+            "cancel my subscription",
+            "cancel subscription",
+        )
+    )
+
+
+def _is_ios(text: str) -> bool:
+    lowered = text.lower()
+    return any(token in lowered for token in ("ios", "iphone", "ipad", "айфон", "айпад"))
+
+
+def _is_android(text: str) -> bool:
+    lowered = text.lower()
+    return any(token in lowered for token in ("android", "андроид"))
+
+
+def _is_windows(text: str) -> bool:
+    lowered = text.lower()
+    if any(token in lowered for token in ("windows", "виндовс")):
+        return True
+    return "приложени" in lowered and ("пк" in lowered or "десктоп" in lowered)
+
+
+def _is_extension(text: str) -> bool:
+    lowered = text.lower()
+    return "расширени" in lowered or "extension" in lowered
+
+
+def _apply_fixed_subcategory_rules(subcategory: str, conversation: dict | None) -> str:
+    """Нормализует подкатегорию и применяет фиксированные правила по тексту переписки.
+
+    Порядок приоритета (первое сработавшее правило побеждает):
+    1. Тариф "Для документов" (user + admin)
+    2. Отмены (user)
+    3. iOS-приложение (user)
+    4. Android-приложение (user)
+    5. Windows-приложение (user)
+    6. Расширение (user)
+    """
+    normalized = _normalize_subcategory(subcategory)
+    all_text = _conversation_text(conversation, roles=("customer", "operator", "bot", "unknown"))
+    user_text = _conversation_text(conversation, roles=("customer",))
+
+    if _is_document_tariff(all_text):
+        return 'Тариф "Для документов"'
+    if _is_cancel(user_text):
+        return "Отмены"
+    if _is_ios(user_text):
+        return "iOS-приложение"
+    if _is_android(user_text):
+        return "Android-приложение"
+    if _is_windows(user_text):
+        return "Windows-приложение"
+    if _is_extension(user_text):
+        return "Расширение"
+
+    return normalized if normalized in FIXED_SUBCATEGORIES else subcategory
+
+
+def _finalize_classification(item: dict, conversation: dict | None) -> dict:
+    normalized = _normalized_classification(item)
+    normalized["subcategory"] = _apply_fixed_subcategory_rules(normalized["subcategory"], conversation)
+    return normalized
 
 
 def _load_recommendations(recommendations: str | Path | list[str] | None) -> list[str]:
@@ -244,7 +383,11 @@ def merge_agents_results(
     if errors:
         raise AnalysisError("Ошибки слияния результатов субагентов:\n- " + "\n- ".join(errors))
 
-    classifications = [_normalized_classification(merged[cid]) for cid in union_ids]
+    conversation_by_id = {str(c["id"]): c for c in union_payload["conversations"]}
+    classifications = [
+        _finalize_classification(merged[cid], conversation_by_id.get(cid))
+        for cid in union_ids
+    ]
     week_ids = {item["id"] for item in _build_payload(week_rows)["conversations"]}
     day_ids = {item["id"] for item in _build_payload(day_rows)["conversations"]}
 
