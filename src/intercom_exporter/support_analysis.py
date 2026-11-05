@@ -323,24 +323,38 @@ def _default_monitoring_output(week_path: Path, day_path: Path) -> Path:
 def find_latest_run(data_root: str | Path = "data", service_id: str | None = None) -> Path:
     """Каталог последнего прогона мониторинга.
 
-    Новая раскладка: data/<stamp>/<service>/last_week/...
-    Для обратной совместимости: если для vpn не найдено новое расположение,
-    ищет в корне data/<stamp>/last_week/... (старые прогоны).
+    Новая раскладка: data/<stamp>/<service_folder>/last_week/...
+    Для обратной совместимости: старая раскладка data/<service_id>/<stamp>/last_week/...
+    и самая старая data/<stamp>/last_week/... (только vpn).
     """
     root = Path(data_root)
-    service = service_id or "vpn"
-    search_roots = [root / service]
-    if service == "vpn":
-        search_roots.append(root)
+    service = get_service(service_id)
     candidates = []
-    for search_root in search_roots:
-        if not search_root.is_dir():
-            continue
-        for path in search_root.iterdir():
+
+    # Новая раскладка: data/<stamp>/<service_folder>/last_week/...
+    if root.is_dir():
+        for path in root.iterdir():
+            if not path.is_dir():
+                continue
+            service_dir = path / service.folder_name
+            if (service_dir / "last_week" / "conversations.json").is_file() and (service_dir / "last_day" / "conversations.json").is_file():
+                candidates.append(service_dir)
+
+    # Старая раскладка: data/<service_id>/<stamp>/last_week/...
+    legacy_root = root / service.id
+    if legacy_root.is_dir():
+        for path in legacy_root.iterdir():
             if path.is_dir() and (path / "last_week" / "conversations.json").is_file() and (path / "last_day" / "conversations.json").is_file():
                 candidates.append(path)
+
+    # Самая старая раскладка: data/<stamp>/last_week/... (только vpn)
+    if service.id == "vpn":
+        for path in root.iterdir():
+            if path.is_dir() and (path / "last_week" / "conversations.json").is_file() and (path / "last_day" / "conversations.json").is_file():
+                candidates.append(path)
+
     if not candidates:
-        raise AnalysisError(f"В {root} нет прогонов со срезами last_week/last_day для сервиса {service}")
+        raise AnalysisError(f"В {root} нет прогонов со срезами last_week/last_day для сервиса {service.id}")
 
     def stamp(path: Path) -> float:
         marker = path / "last_day" / "manifest.json"

@@ -106,12 +106,14 @@ def run_monitoring(
     agents: bool = True,
     agent_workers: int = 10,
     service_id: str | None = None,
+    create_run_dir: bool = True,
 ) -> dict[str, Any]:
     window_set = windows or build_monitoring_windows()
     source_name = "backup_3_months" if full_archive else "last_week"
     export_result = exporter.run(
         window_set[source_name], output_root,
         api_version=api_version, selection="all", fields="all", timezone_name=timezone_name,
+        create_run_dir=create_run_dir,
     )
     snapshot_names = ("backup_3_months", "last_week", "last_day") if full_archive else ("last_week", "last_day")
     snapshot_windows = {name: window_set[name] for name in snapshot_names}

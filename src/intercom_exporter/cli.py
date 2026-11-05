@@ -102,11 +102,17 @@ def main(argv: list[str] | None = None) -> int:
                 f"неделя [{windows['last_week'].start.isoformat()}, {windows['last_week'].end.isoformat()}); "
                 f"день [{windows['last_day'].start.isoformat()}, {windows['last_day'].end.isoformat()}); "
                 f"поля: all; базовый каталог: {base_output_dir} (при повторном запуске будет создан новый каталог); "
-                f"раскладка: <базовый каталог>/<сервис>/..."
+                f"раскладка: {base_output_dir}/<сервис>/..."
             )
             return 0
     if not args.standard:
         any_failed = False
+        base_run_root = Path(args.output) / run_dir_name()
+        run_root = base_run_root
+        suffix = 1
+        while run_root.exists():
+            run_root = base_run_root.with_name(f"{base_run_root.name}_{suffix:02d}")
+            suffix += 1
         for service in services:
             try:
                 service_config = load_config(service_id=service.id)
@@ -118,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
                 IntercomClient(service_config.access_token, service_config.api_version),
                 max_workers=args.workers,
             )
-            service_output = Path(args.output) / service.id
+            service_output = run_root / service.folder_name
             try:
                 result = run_monitoring(
                     service_exporter, service_output, full_archive=args.full_archive, windows=windows,
@@ -127,6 +133,7 @@ def main(argv: list[str] | None = None) -> int:
                     agents=not args.no_agents,
                     agent_workers=args.agent_workers if args.agent_workers is not None else load_agent_workers(),
                     service_id=service.id,
+                    create_run_dir=False,
                 )
             except (IntercomAPIError, AnalysisError, ValueError) as exc:
                 logging.error("%s: мониторинг не выполнен: %s", service.label, exc)

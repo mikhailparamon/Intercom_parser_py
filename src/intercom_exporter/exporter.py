@@ -41,9 +41,11 @@ class ConversationExporter:
 
     @staticmethod
     def _create_output_dir(output_root: str | Path, date_range: DateRange | DateTimeRange,
-                           started_at: datetime) -> Path:
+                           started_at: datetime, *, create_run_dir: bool = True) -> Path:
         root = Path(output_root)
         root.mkdir(parents=True, exist_ok=True)
+        if not create_run_dir:
+            return root
         if isinstance(date_range, DateTimeRange):
             base_name = run_dir_name(started_at)
         else:
@@ -66,7 +68,8 @@ class ConversationExporter:
                     suffix += 1
 
     def run(self, date_range: DateRange | DateTimeRange, output_root: str | Path, *, api_version: str = "unknown",
-            selection: str = "all", fields: str = "important", timezone_name: str = "UTC") -> dict[str, Any]:
+            selection: str = "all", fields: str = "important", timezone_name: str = "UTC",
+            create_run_dir: bool = True) -> dict[str, Any]:
         if selection not in {"new", "updated", "all"}:
             raise ValueError("selection должен быть new, updated или all")
         if fields not in {"important", "all"}:
@@ -75,7 +78,8 @@ class ConversationExporter:
         timezone_label = "unix" if target_timezone is None else timezone_name
         started_monotonic = time.perf_counter()
         started_at_time = datetime.now(timezone.utc)
-        output_dir = self._create_output_dir(output_root, date_range, started_at_time)
+        output_dir = self._create_output_dir(output_root, date_range, started_at_time,
+                                             create_run_dir=create_run_dir)
         store = JsonStore(output_dir / "conversations.json")
         found = exported = errors = 0
         started_at = started_at_time.isoformat()

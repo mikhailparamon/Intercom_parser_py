@@ -118,8 +118,33 @@ def test_run_monitoring_uses_one_full_fields_export_with_api_version(tmp_path):
 
     assert len(calls) == 1
     assert calls[0][0] == windows["backup_3_months"]
-    assert calls[0][2] == {"api_version": "2.17", "selection": "all", "fields": "all", "timezone_name": "UTC"}
+    assert calls[0][2] == {"api_version": "2.17", "selection": "all", "fields": "all",
+                            "timezone_name": "UTC", "create_run_dir": True}
     assert result["snapshots"]["backup_3_months"]["conversation_count"] == 0
+
+
+def test_run_monitoring_passes_create_run_dir_false(tmp_path):
+    from intercom_exporter.monitoring import run_monitoring
+
+    windows = build_monitoring_windows(datetime(2026, 10, 31, tzinfo=timezone.utc))
+    calls = []
+
+    class FakeExporter:
+        def run(self, period, output_root, **kwargs):
+            calls.append(kwargs)
+            export_dir = Path(output_root)
+            export_dir.mkdir(parents=True, exist_ok=True)
+            (export_dir / "conversations.json").write_text("[]", encoding="utf-8")
+            (export_dir / "manifest.json").write_text(json.dumps({"status": "success"}), encoding="utf-8")
+            return {"output_dir": str(export_dir), "status": "success", "error_count": 0}
+
+    result = run_monitoring(
+        FakeExporter(), tmp_path, full_archive=False, windows=windows, prepare=None,
+        create_run_dir=False,
+    )
+
+    assert calls[0]["create_run_dir"] is False
+    assert result["snapshots"]["last_week"]["conversation_count"] == 0
 
 
 def test_run_monitoring_prepares_one_shared_analysis_from_both_windows(tmp_path):

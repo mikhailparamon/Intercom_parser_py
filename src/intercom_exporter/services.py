@@ -10,6 +10,7 @@ class Service:
     id: str
     label: str
     token_env: str
+    folder_name: str
 
 
 SERVICES: dict[str, Service] = {
@@ -17,11 +18,13 @@ SERVICES: dict[str, Service] = {
         id="vpn",
         label="VPNНаоборот",
         token_env="INTERCOM_ACCESS_TOKEN",
+        folder_name="VPNnaoborot",
     ),
     "hypertube": Service(
         id="hypertube",
         label="HyperTube",
         token_env="HYPERTUBE_INTERCOM_ACCESS_TOKEN",
+        folder_name="Hypertube",
     ),
 }
 
