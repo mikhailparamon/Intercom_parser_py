@@ -366,6 +366,7 @@ def _write_json(path: Path, value: dict[str, Any]) -> None:
 
 
 def _prompt(payload: dict[str, Any], input_file_bytes: int) -> str:
+    from .classification_catalog import catalog_prompt
     template_path = Path(__file__).with_name("support_analysis_prompt_template.md")
     template = template_path.read_text(encoding="utf-8")
     values = {
@@ -376,7 +377,7 @@ def _prompt(payload: dict[str, Any], input_file_bytes: int) -> str:
     }
     for placeholder, value in values.items():
         template = template.replace(placeholder, value)
-    return template
+    return template.replace("[[SUBCATEGORY_CATALOG]]", catalog_prompt("vpn"))
 
 
 def prepare_analysis(input_path: str | Path, output_dir: str | Path | None = None) -> dict[str, Any]:
@@ -408,12 +409,13 @@ def _union_conversations(week_rows: list[dict], day_rows: list[dict]) -> list[di
 
 
 def _monitoring_prompt(week: dict, day: dict, combined: dict, week_bytes: int, day_bytes: int, service_id: str | None = None) -> str:
+    from .classification_catalog import catalog_prompt
     template_name = "support_analysis_prompt_template_hypertube.md" if service_id == "hypertube" else "support_analysis_prompt_template.md"
     template_path = Path(__file__).with_name(template_name)
     template = template_path.read_text(encoding="utf-8")
     start = template.index("## 1. Безопасность и единица анализа")
     end = template.index("## 8. Формат `chatgpt_result.json`")
-    classification_policy = template[start:end].strip()
+    classification_policy = template[start:end].strip().replace("[[SUBCATEGORY_CATALOG]]", catalog_prompt(service_id or "vpn"))
     week_ids = {item["id"] for item in week["conversations"]}
     day_ids = {item["id"] for item in day["conversations"]}
     overlap = len(week_ids & day_ids)
@@ -441,11 +443,13 @@ def _monitoring_prompt(week: dict, day: dict, combined: dict, week_bytes: int, d
 ```json
 {{
   "complete": true,
+  "classification_schema_version": 2,
+  "service_id": "{service_id or 'vpn'}",
   "conversation_count": {combined['conversation_count']},
   "dataset_fingerprint": "{combined['dataset_fingerprint']}",
   "categories": [{{"name": "...", "description": "..."}}],
   "classifications": [
-    {{"id": "...", "category": "...", "subcategory": "...", "additional_topics": [], "platforms": [], "problem_summary": "...", "severity": null, "severity_reason": "...", "confidence": "low", "evidence": "..."}}
+    {{"id": "...", "category": "...", "subcategory_code": "...", "subcategory": "...", "additional_topics": [], "platforms": [], "problem_summary": "...", "severity": null, "severity_reason": "...", "confidence": "low", "evidence": "..."}}
   ],
   "executive_summary": "Общий краткий вывод по объединению",
   "recommendations": ["Общая рекомендация"],
@@ -601,6 +605,10 @@ def _load_result(path: str | Path) -> dict[str, Any]:
 
 
 def _validate_result(rows: list[dict[str, Any]], payload: dict[str, Any], result: dict[str, Any]) -> tuple[list[dict], list[dict]]:
+    from .classification_catalog import SCHEMA_VERSION, canonical_classification, confirmed_platforms, get_subcategories
+
+    strict = result.get("classification_schema_version", 1) >= SCHEMA_VERSION
+    service_id = result.get("service_id", "vpn")
     if result.get("complete") is not True:
         raise AnalysisError("Результат помечен как неполный (complete не равен true)")
     if result.get("conversation_count") != len(rows):
@@ -639,6 +647,11 @@ def _validate_result(rows: list[dict[str, Any]], payload: dict[str, Any], result
     for item in raw_classifications:
         if not isinstance(item, dict) or item.get("id") is None:
             raise AnalysisError("У классификации отсутствует ID")
+        if strict:
+            try:
+                item = canonical_classification(item, service_id)
+            except ValueError as exc:
+                raise AnalysisError(f"У обращения {item['id']}: {exc}") from exc
         conversation_id = str(item["id"])
         if conversation_id not in expected_ids:
             raise AnalysisError(f"Результат содержит неизвестный ID обращения: {conversation_id}")
@@ -651,6 +664,8 @@ def _validate_result(rows: list[dict[str, Any]], payload: dict[str, Any], result
         if not isinstance(item.get("evidence"), str):
             raise AnalysisError(f"У обращения {conversation_id} поле evidence должно быть строкой")
         platforms = item.get("platforms", [])
+        if strict and any(field not in item for field in ("platforms", "additional_topics")):
+            raise AnalysisError(f"У обращения {conversation_id} обязательны platforms и additional_topics")
         if not isinstance(platforms, list) or any(not isinstance(value, str) or not value.strip() for value in platforms):
             raise AnalysisError(f"У обращения {conversation_id}: platforms должен быть списком непустых строк")
         additional_topics = item.get("additional_topics", [])
@@ -679,6 +694,7 @@ def _validate_result(rows: list[dict[str, Any]], payload: dict[str, Any], result
             if isinstance(message, dict) and message.get("role") == "customer"
         )
         classifications.append({
+            **({"subcategory_code": item["subcategory_code"]} if "subcategory_code" in item else {}),
             "id": conversation_id,
             "category": item["category"],
             "subcategory": _normalize_problem_subcategory(item["subcategory"]),
@@ -687,7 +703,7 @@ def _validate_result(rows: list[dict[str, Any]], payload: dict[str, Any], result
             "severity_reason": item["severity_reason"].strip(),
             "confidence": confidence,
             "evidence": item["evidence"].strip(),
-            "platforms": _normalize_platforms(platforms, customer_context),
+            "platforms": confirmed_platforms(safe_conversation, service_id) if strict else _normalize_platforms(platforms, customer_context),
             "additional_topics": list(dict.fromkeys(value.strip() for value in additional_topics)),
         })
     missing_ids = expected_ids - seen_ids
@@ -695,6 +711,10 @@ def _validate_result(rows: list[dict[str, Any]], payload: dict[str, Any], result
         raise AnalysisError(f"В классификации пропущены обращения: {', '.join(sorted(missing_ids))}")
     if len(classifications) != len(rows):
         raise AnalysisError(f"Ожидалось {len(rows)} классификаций, получено {len(classifications)}")
+    if strict:
+        allowed_categories = {name for entry in get_subcategories(service_id) for name in entry["categories"]}
+        if category_names != allowed_categories:
+            raise AnalysisError("Список categories должен точно совпадать с десятью категориями сервиса")
     row_order = {str(row["id"]): index for index, row in enumerate(rows)}
     classifications.sort(key=lambda item: row_order[item["id"]])
     summary = result.get("executive_summary")
@@ -723,6 +743,10 @@ def _period_label(input_path: str | Path) -> str | None:
 
 def _markdown_report(rows: list[dict], categories: list[dict], classifications: list[dict], result: dict,
                     period: str | None) -> tuple[str, dict, dict]:
+    from .dashboard import build_dashboard_data, coverage_notes
+
+    aggregates = build_dashboard_data(rows, [], categories, classifications, period or "", "")
+    sub_note, platform_note = coverage_notes(aggregates)
     category_counts = Counter(item["category"] for item in classifications)
     severity_counts = Counter(item["severity"] or "unknown" for item in classifications)
     severity_summary = {key: severity_counts.get(key, 0) for key in ("high", "medium", "low", "unknown")}
@@ -746,11 +770,12 @@ def _markdown_report(rows: list[dict], categories: list[dict], classifications: 
         "", "## Топ-10 подкатегорий: проблемы и запросы", "",
         "| Место | Подкатегория | Обращений | Доля |", "|---:|---|---:|---:|",
     ])
-    for rank, (name, count) in enumerate(
-        sorted(subcategory_counts.items(), key=lambda pair: (-pair[1], pair[0].casefold()))[:10], start=1
-    ):
+    for rank, entry in enumerate(aggregates["subcategories"], start=1):
+        name, count = entry["name"], entry["count"]
         escaped_name = name.replace("|", "\\|")
         lines.append(f"| {rank} | {escaped_name} | {count} | {count / len(rows) * 100:.1f}% |")
+    lines.extend(["", sub_note, "", "### Полное распределение подкатегорий", "", "| Подкатегория | Обращений |", "|---|---:|"])
+    lines.extend(f"| {name} | {count} |" for name, count in subcategory_counts.most_common())
     platform_counts = Counter(
         platform for item in classifications for platform in set(item.get("platforms", []))
     )
@@ -763,6 +788,7 @@ def _markdown_report(rows: list[dict], categories: list[dict], classifications: 
         )
     else:
         lines.append("Платформа не указана или не подтверждена в переписке.")
+    lines.extend(["", platform_note, "", "Одно обращение может учитываться в нескольких платформах: способах подключения, операционных системах, устройствах и браузерах. Сумма строк может превышать число обращений."])
     docs_tariff_cases = [
         item for item in classifications
         if item["subcategory"] == DOCS_TARIFF_SUBCATEGORY
@@ -828,6 +854,8 @@ def _write_classifications_csv(path: Path, classifications: list[dict], periods:
     path.parent.mkdir(parents=True, exist_ok=True)
     fields = ("id", "category", "subcategory", "additional_topics", "platforms", "problem_summary", "severity",
               "severity_reason", "confidence", "evidence")
+    if any("subcategory_code" in item for item in classifications):
+        fields = (*fields, "subcategory_code")
     if periods is not None:
         fields = (*fields, "periods")
     temp_path = None

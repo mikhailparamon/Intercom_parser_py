@@ -22,7 +22,7 @@ def _setup(tmp_path, service=None):
     _write(week, rows)
     _write(day, rows[:1])
     output = tmp_path / "support-analysis"
-    manifest = prepare_agents_bundle(week, day, output, workers=2, service_id=service)
+    manifest = prepare_agents_bundle(week, day, output, schema_version=1, workers=2, service_id=service)
     for entry in manifest["chunks"]:
         chunk = json.loads(Path(entry["chunk_path"]).read_text(encoding="utf-8"))
         _write(Path(entry["result_path"]), {"classifications": [
@@ -116,7 +116,8 @@ def test_cli_merge_returns_pending_without_slack(tmp_path, monkeypatch):
 def test_primary_prompt_restricts_other_and_supports_title_only_requests(tmp_path, service):
     _, _, output = _setup(tmp_path, service)
     prompt = (output / "PROMPT.md").read_text(encoding="utf-8")
-    assert all(label in prompt for label in OTHER_SUBCATEGORIES)
+    assert "no_request" in prompt and "non_target" in prompt
+    assert "Нет содержательного запроса" in prompt
     assert "Как поменять карту для оплаты?" in prompt
     assert "Не получается войти" in prompt
 

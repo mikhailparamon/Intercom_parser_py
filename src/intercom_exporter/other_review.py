@@ -4,6 +4,8 @@ import hashlib
 import json
 from pathlib import Path
 
+from .classification_catalog import SCHEMA_VERSION, catalog_prompt, get_subcategories
+
 from .support_analysis import (
     AnalysisError, OTHER_CATEGORY, OTHER_SUBCATEGORIES, _validate_result, _write_json, _write_text,
 )
@@ -12,6 +14,7 @@ from .support_analysis import (
 def review_other_classifications(
     classifications: dict[str, dict], payload: dict, output_dir: str | Path,
     taxonomy: list[dict], workers: int, service_id: str | None = None,
+    schema_version: int = 1,
 ) -> dict:
     candidates = [c for c in payload["conversations"] if classifications[c["id"]]["category"] == OTHER_CATEGORY]
     if not candidates:
@@ -19,18 +22,18 @@ def review_other_classifications(
 
     template_name = "support_analysis_prompt_template_hypertube.md" if service_id == "hypertube" else "support_analysis_prompt_template.md"
     template = Path(__file__).with_name(template_name).read_text(encoding="utf-8")
-    policy = template[template.index("## 1. Безопасность и единица анализа"):template.index("## 8. Формат `chatgpt_result.json`")]
+    policy = template[template.index("## 1. Безопасность и единица анализа"):template.index("## 8. Формат `chatgpt_result.json`")].replace("[[SUBCATEGORY_CATALOG]]", catalog_prompt(service_id or "vpn"))
     protocol = Path(__file__).with_name("other_review_protocol.md").read_text(encoding="utf-8")
     workers = min(workers, len(candidates))
     fingerprint = hashlib.sha256(json.dumps({
         "dataset": payload["dataset_fingerprint"], "taxonomy": taxonomy,
         "classifications": [classifications[c["id"]] for c in candidates], "policy": policy, "protocol": protocol,
-        "workers": workers,
+        "workers": workers, "schema_version": schema_version,
     }, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
     output = Path(output_dir)
     work = output / "agents_work" / "other_review" / fingerprint[:20]
     work.mkdir(parents=True, exist_ok=True)
-    _write_json(work / "taxonomy.json", {"categories": taxonomy})
+    _write_json(work / "taxonomy.json", {"categories": taxonomy, "subcategories": get_subcategories(service_id or "vpn")})
     _write_text(work / "PROMPT.md", protocol + "\n\n" + policy)
     _write_text(work / "agents_protocol.md", protocol)
     chunks = []
@@ -50,6 +53,7 @@ def review_other_classifications(
     manifest_path = work / "manifest.json"
     _write_json(manifest_path, {
         "stage": "other_review", "review_fingerprint": fingerprint, "workers": workers,
+        "classification_schema_version": schema_version,
         "unique_conversation_count": len(candidates), "work_dir": str(work),
         "prompt_path": str(work / "PROMPT.md"), "taxonomy_path": str(work / "taxonomy.json"), "chunks": chunks,
     })
@@ -70,6 +74,7 @@ def review_other_classifications(
         if not isinstance(data, dict) or data.get("review_fingerprint") != fingerprint:
             raise AnalysisError(f"Повторная проверка: неверный отпечаток набора в {path}")
         _, normalized = _validate_result(chunk["conversations"], {"dataset_fingerprint": fingerprint}, {
+            "classification_schema_version": schema_version, "service_id": service_id or "vpn",
             "complete": True, "conversation_count": len(chunk["conversations"]), "dataset_fingerprint": fingerprint,
             "categories": taxonomy, "classifications": data.get("classifications"),
             "executive_summary": "Повторная проверка", "recommendations": [],
@@ -82,7 +87,8 @@ def review_other_classifications(
             if not isinstance(reason, str) or not reason.strip():
                 raise AnalysisError(f"Повторная проверка {cid}: не заполнено review_reason")
             if item["category"] == OTHER_CATEGORY:
-                if item["subcategory"] not in OTHER_SUBCATEGORIES:
+                allowed = {"Нет содержательного запроса", "Автоматическое, нецелевое сообщение или спам"} if schema_version >= SCHEMA_VERSION else OTHER_SUBCATEGORIES
+                if item["subcategory"] not in allowed:
                     raise AnalysisError(f"Повторная проверка {cid}: у «Прочих» нужна конкретная причина из списка {OTHER_SUBCATEGORIES}")
             else:
                 conversation = by_id[cid]

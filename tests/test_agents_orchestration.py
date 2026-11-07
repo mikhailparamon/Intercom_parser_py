@@ -32,7 +32,7 @@ def test_prepare_agents_bundle_writes_chunks_manifest_and_protocol(tmp_path):
     day = _write_conversations(tmp_path / "last_day", ["w0", "w1", "w2"])
     out = tmp_path / "support-analysis"
 
-    manifest = prepare_agents_bundle(week, day, out, workers=5)
+    manifest = prepare_agents_bundle(week, day, out, schema_version=1, workers=5)
 
     work = out / "agents_work"
     assert (work / "taxonomy.json").is_file()
@@ -63,7 +63,7 @@ def test_hypertube_prompt_keeps_problem_and_platform_separate(tmp_path):
     week = _write_conversations(tmp_path / "last_week", ["a"])
     day = _write_conversations(tmp_path / "last_day", ["a"])
     out = tmp_path / "support-analysis"
-    prepare_agents_bundle(week, day, out, workers=2, service_id="hypertube")
+    prepare_agents_bundle(week, day, out, schema_version=1, workers=2, service_id="hypertube")
     prompt = (out / "PROMPT.md").read_text(encoding="utf-8")
     assert "На телевизоре бесконечно грузится видео" in prompt
     assert "Нет подключения к интернету" in prompt
@@ -160,7 +160,7 @@ def test_merge_agents_results_validates_and_builds_report(tmp_path):
     week = _write_conversations(tmp_path / "last_week", [f"w{i}" for i in range(6)])
     day = _write_conversations(tmp_path / "last_day", ["w0", "w1"])
     out = tmp_path / "support-analysis"
-    manifest = prepare_agents_bundle(week, day, out, workers=3)
+    manifest = prepare_agents_bundle(week, day, out, schema_version=1, workers=3)
     _fill_results(manifest, category=None)
 
     outcome = merge_agents_results(week, day, out)
@@ -178,7 +178,7 @@ def test_merge_agents_results_reports_missing_worker(tmp_path):
     week = _write_conversations(tmp_path / "last_week", ["a", "b"])
     day = _write_conversations(tmp_path / "last_day", ["a"])
     out = tmp_path / "support-analysis"
-    manifest = prepare_agents_bundle(week, day, out, workers=2)
+    manifest = prepare_agents_bundle(week, day, out, schema_version=1, workers=2)
     _fill_results(manifest, category=None, skip_worker=2)
 
     with pytest.raises(AnalysisError, match="воркер 2"):
@@ -189,7 +189,7 @@ def test_merge_agents_results_rejects_unknown_category(tmp_path):
     week = _write_conversations(tmp_path / "last_week", ["a", "b"])
     day = _write_conversations(tmp_path / "last_day", ["a"])
     out = tmp_path / "support-analysis"
-    manifest = prepare_agents_bundle(week, day, out, workers=2)
+    manifest = prepare_agents_bundle(week, day, out, schema_version=1, workers=2)
     _fill_results(manifest, category="Выдуманная категория")
 
     with pytest.raises(AnalysisError, match="не из таксономии"):
@@ -200,7 +200,7 @@ def test_merge_agents_results_compare_with_previous(tmp_path):
     week = _write_conversations(tmp_path / "last_week", ["a", "b"])
     day = _write_conversations(tmp_path / "last_day", ["a"])
     out = tmp_path / "support-analysis"
-    manifest = prepare_agents_bundle(week, day, out, workers=2)
+    manifest = prepare_agents_bundle(week, day, out, schema_version=1, workers=2)
     _fill_results(manifest, category=None)
     previous = {"classifications": [
         {"id": "a", "category": "Проблемы подключения VPN", "subcategory": "Не подключается", "severity": None},
@@ -220,7 +220,7 @@ def test_merge_agents_results_rejects_unknown_id(tmp_path):
     week = _write_conversations(tmp_path / "last_week", ["a", "b"])
     day = _write_conversations(tmp_path / "last_day", ["a"])
     out = tmp_path / "support-analysis"
-    manifest = prepare_agents_bundle(week, day, out, workers=2)
+    manifest = prepare_agents_bundle(week, day, out, schema_version=1, workers=2)
     _fill_results(manifest, category=None)
     entry = manifest["chunks"][0]
     result = json.loads(Path(entry["result_path"]).read_text(encoding="utf-8"))
@@ -239,7 +239,7 @@ def test_merge_agents_results_rejects_non_list_classifications(tmp_path):
     week = _write_conversations(tmp_path / "last_week", ["a", "b"])
     day = _write_conversations(tmp_path / "last_day", ["a"])
     out = tmp_path / "support-analysis"
-    manifest = prepare_agents_bundle(week, day, out, workers=2)
+    manifest = prepare_agents_bundle(week, day, out, schema_version=1, workers=2)
     _fill_results(manifest, category=None)
     entry = manifest["chunks"][0]
     Path(entry["result_path"]).write_text(json.dumps({"classifications": {"a": "x"}}, ensure_ascii=False), encoding="utf-8")
@@ -252,7 +252,7 @@ def test_merge_agents_results_rejects_non_dict_item(tmp_path):
     week = _write_conversations(tmp_path / "last_week", ["a", "b"])
     day = _write_conversations(tmp_path / "last_day", ["a"])
     out = tmp_path / "support-analysis"
-    manifest = prepare_agents_bundle(week, day, out, workers=2)
+    manifest = prepare_agents_bundle(week, day, out, schema_version=1, workers=2)
     _fill_results(manifest, category=None)
     entry = manifest["chunks"][0]
     Path(entry["result_path"]).write_text(
@@ -267,7 +267,7 @@ def test_prepare_agents_bundle_caps_workers_at_conversation_count(tmp_path):
     day = _write_conversations(tmp_path / "last_day", ["a"])
     out = tmp_path / "support-analysis"
 
-    manifest = prepare_agents_bundle(week, day, out, workers=20)
+    manifest = prepare_agents_bundle(week, day, out, schema_version=1, workers=20)
 
     assert manifest["workers"] == 3
     assert len(manifest["chunks"]) == 3
@@ -278,7 +278,7 @@ def test_prepare_agents_bundle_generates_prompt(tmp_path):
     day = _write_conversations(tmp_path / "last_day", ["a"])
     out = tmp_path / "support-analysis"
 
-    manifest = prepare_agents_bundle(week, day, out, workers=2)
+    manifest = prepare_agents_bundle(week, day, out, schema_version=1, workers=2)
 
     prompt_path = out / "PROMPT.md"
     assert prompt_path.is_file()
@@ -315,7 +315,7 @@ def test_cli_merge_agents(tmp_path, capsys):
     week = _write_conversations(tmp_path / "run" / "last_week", ["a"])
     day = _write_conversations(tmp_path / "run" / "last_day", ["a"])
     out = tmp_path / "run" / "support-analysis"
-    manifest = prepare_agents_bundle(week, day, out, workers=2)
+    manifest = prepare_agents_bundle(week, day, out, schema_version=1, workers=2)
     _fill_results(manifest, category=None)
 
     code = main(["merge-agents", "--week", str(week), "--day", str(day), "--service", "vpn"])
@@ -328,7 +328,7 @@ def test_merge_agents_results_uses_recommendations_file(tmp_path):
     week = _write_conversations(tmp_path / "last_week", ["a", "b"])
     day = _write_conversations(tmp_path / "last_day", ["a"])
     out = tmp_path / "support-analysis"
-    manifest = prepare_agents_bundle(week, day, out, workers=2)
+    manifest = prepare_agents_bundle(week, day, out, schema_version=1, workers=2)
     _fill_results(manifest, category=None)
     rec_path = tmp_path / "recommendations.json"
     rec_path.write_text(json.dumps(["Рекомендация 1", "Рекомендация 2"], ensure_ascii=False), encoding="utf-8")
@@ -348,7 +348,7 @@ def test_merge_agents_results_rejects_bad_recommendations(tmp_path):
     week = _write_conversations(tmp_path / "last_week", ["a", "b"])
     day = _write_conversations(tmp_path / "last_day", ["a"])
     out = tmp_path / "support-analysis"
-    manifest = prepare_agents_bundle(week, day, out, workers=2)
+    manifest = prepare_agents_bundle(week, day, out, schema_version=1, workers=2)
     _fill_results(manifest, category=None)
     rec_path = tmp_path / "recommendations.json"
     rec_path.write_text(json.dumps({"not": "a list"}, ensure_ascii=False), encoding="utf-8")
@@ -361,7 +361,7 @@ def test_merge_agents_results_accepts_recommendations_list(tmp_path):
     week = _write_conversations(tmp_path / "last_week", ["a"])
     day = _write_conversations(tmp_path / "last_day", ["a"])
     out = tmp_path / "support-analysis"
-    manifest = prepare_agents_bundle(week, day, out, workers=2)
+    manifest = prepare_agents_bundle(week, day, out, schema_version=1, workers=2)
     _fill_results(manifest, category=None)
 
     outcome = merge_agents_results(week, day, out, recommendations=["  Общий совет  "])
@@ -377,7 +377,7 @@ def test_cli_merge_agents_defaults_to_latest_run(tmp_path, monkeypatch, capsys):
     week = _write_conversations(run / "last_week", ["a"])
     day = _write_conversations(run / "last_day", ["a"])
     out = run / "support-analysis"
-    manifest = prepare_agents_bundle(week, day, out, workers=2)
+    manifest = prepare_agents_bundle(week, day, out, schema_version=1, workers=2)
     _fill_results(manifest, category=None)
     monkeypatch.chdir(tmp_path)
 
@@ -395,7 +395,7 @@ def test_cli_merge_agents_picks_up_agents_work_recommendations(tmp_path, monkeyp
     week = _write_conversations(run / "last_week", ["a"])
     day = _write_conversations(run / "last_day", ["a"])
     out = run / "support-analysis"
-    manifest = prepare_agents_bundle(week, day, out, workers=2)
+    manifest = prepare_agents_bundle(week, day, out, schema_version=1, workers=2)
     _fill_results(manifest, category=None)
     rec_path = out / "agents_work" / "recommendations.json"
     rec_path.write_text(json.dumps(["Общий совет из бандла"], ensure_ascii=False), encoding="utf-8")
@@ -414,7 +414,7 @@ def test_cli_render_dashboard_from_existing_result(tmp_path, monkeypatch):
     week = _write_conversations(run / "last_week", ["a"])
     day = _write_conversations(run / "last_day", ["a"])
     out = run / "support-analysis"
-    manifest = prepare_agents_bundle(week, day, out, workers=2)
+    manifest = prepare_agents_bundle(week, day, out, schema_version=1, workers=2)
     _fill_results(manifest, category=None)
     monkeypatch.chdir(tmp_path)
     assert main(["merge-agents"]) == 0
@@ -445,7 +445,7 @@ def test_merge_agents_results_defaults_recommendations_from_stats(tmp_path):
     week = _write_conversations(tmp_path / "last_week", ["a", "b"])
     day = _write_conversations(tmp_path / "last_day", ["a"])
     out = tmp_path / "support-analysis"
-    manifest = prepare_agents_bundle(week, day, out, workers=2)
+    manifest = prepare_agents_bundle(week, day, out, schema_version=1, workers=2)
     _fill_results(manifest, category=None)
 
     outcome = merge_agents_results(week, day, out)
@@ -466,7 +466,7 @@ def test_merge_agents_results_default_recommendations_flag_high_severity(tmp_pat
     week = _write_conversations(tmp_path / "last_week", ["a"])
     day = _write_conversations(tmp_path / "last_day", ["a"])
     out = tmp_path / "support-analysis"
-    manifest = prepare_agents_bundle(week, day, out, workers=2)
+    manifest = prepare_agents_bundle(week, day, out, schema_version=1, workers=2)
     _fill_results(manifest, category=None)
     entry = manifest["chunks"][0]
     result = json.loads(Path(entry["result_path"]).read_text(encoding="utf-8"))
@@ -486,7 +486,7 @@ def test_cli_research_merges_and_builds_dashboard(tmp_path, monkeypatch):
     week = _write_conversations(run / "last_week", ["a"])
     day = _write_conversations(run / "last_day", ["a"])
     out = run / "support-analysis"
-    manifest = prepare_agents_bundle(week, day, out, workers=2)
+    manifest = prepare_agents_bundle(week, day, out, schema_version=1, workers=2)
     _fill_results(manifest, category=None)
     (out / "agents_work" / "recommendations.json").write_text(
         json.dumps(["Совет"], ensure_ascii=False), encoding="utf-8")
@@ -598,7 +598,7 @@ def test_merge_preserves_problem_and_separates_platforms(tmp_path):
     week = _write_conversations(tmp_path / "last_week", ["a"])
     day = _write_conversations(tmp_path / "last_day", ["a"])
     out = tmp_path / "support-analysis"
-    manifest = prepare_agents_bundle(week, day, out, workers=2)
+    manifest = prepare_agents_bundle(week, day, out, schema_version=1, workers=2)
     _fill_results(manifest)
     for entry in manifest["chunks"]:
         chunk = json.loads(Path(entry["chunk_path"]).read_text(encoding="utf-8"))
@@ -630,7 +630,7 @@ def test_merge_agents_results_applies_fixed_subcategory_rules(tmp_path):
     week = _write_conversations(tmp_path / "last_week", ["a", "b", "c"])
     day = _write_conversations(tmp_path / "last_day", ["a"])
     out = tmp_path / "support-analysis"
-    manifest = prepare_agents_bundle(week, day, out, workers=2)
+    manifest = prepare_agents_bundle(week, day, out, schema_version=1, workers=2)
 
     # Заполняем result с вариантами написания, которые должны нормализоваться
     for entry in manifest["chunks"]:
@@ -738,7 +738,7 @@ def test_merge_agents_results_applies_hypertube_fixed_subcategory_rules(tmp_path
     week = _write_conversations(tmp_path / "last_week", ["a", "b", "c"])
     day = _write_conversations(tmp_path / "last_day", ["a"])
     out = tmp_path / "support-analysis"
-    manifest = prepare_agents_bundle(week, day, out, workers=2, service_id="hypertube")
+    manifest = prepare_agents_bundle(week, day, out, schema_version=1, workers=2, service_id="hypertube")
 
     for entry in manifest["chunks"]:
         chunk = json.loads(Path(entry["chunk_path"]).read_text(encoding="utf-8"))

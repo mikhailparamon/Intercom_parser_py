@@ -120,6 +120,7 @@ def build_dashboard_data(
     subcategory_counts = Counter(
         item["subcategory"] for item in week_classifications
         if item["subcategory"] not in {"Нет запроса", DOCS_TARIFF_SUBCATEGORY, DOCS_TARIFF_LABEL}
+        and item.get("subcategory_code") not in {"no_request", "non_target"}
     )
     if docs_tariff_week:
         subcategory_counts[DOCS_TARIFF_LABEL] = len(docs_tariff_week)
@@ -127,16 +128,31 @@ def build_dashboard_data(
         {"name": name, "count": count}
         for name, count in sorted(subcategory_counts.items(), key=lambda item: (-item[1], item[0].casefold()))[:10]
     ]
+    platform_sets = [
+        set(item.get("platforms", [])) if "subcategory_code" in item
+        else set(_normalize_platforms(item.get("platforms", [])))
+        for item in week_classifications
+    ]
     platform_counts = Counter(
         platform
-        for item in week_classifications
-        for platform in set(_normalize_platforms(item.get("platforms", [])))
-        if platform not in HIDDEN_PLATFORMS
+        for item, values in zip(week_classifications, platform_sets)
+        for platform in values
+        if "subcategory_code" in item or platform not in HIDDEN_PLATFORMS
     )
     platforms = [
         {"name": name, "count": count}
-        for name, count in sorted(platform_counts.items(), key=lambda item: -item[1])[:TOP_PLATFORM_LIMIT]
+        for name, count in sorted(platform_counts.items(), key=lambda item: (-item[1], item[0].casefold()))[:TOP_PLATFORM_LIMIT]
     ]
+    top_subcategories = {item["name"] for item in subcategories}
+    top_platforms = {item["name"] for item in platforms}
+    docs_ids = {item["id"] for item in docs_tariff_week}
+    subcategory_top_ids = {
+        item["id"] for item in week_classifications
+        if item["subcategory"] in top_subcategories
+        or (DOCS_TARIFF_LABEL in top_subcategories and item["id"] in docs_ids)
+    }
+    with_platform = sum(bool(values) for values in platform_sets)
+    platform_top_count = sum(bool(values & top_platforms) for values in platform_sets)
     severity_week = _severity_breakdown(week_classifications)
     high_cases_all = [
         {"id": item["id"], "category": item["category"], "subcategory": item["subcategory"],
@@ -167,7 +183,22 @@ def build_dashboard_data(
         "week_categories": week_categories,
         "day_categories": _category_breakdown(day_classifications),
         "subcategories": subcategories,
+        "all_subcategories": [
+            {"name": name, "count": count}
+            for name, count in Counter(item["subcategory"] for item in week_classifications).most_common()
+        ],
+        "subcategory_coverage": {
+            "total": len(week_classifications), "in_top": len(subcategory_top_ids),
+            "outside_top": len(week_classifications) - len(subcategory_top_ids),
+        },
         "platforms": platforms,
+        "all_platforms": [{"name": name, "count": count} for name, count in platform_counts.most_common()],
+        "platform_coverage": {
+            "total": len(week_classifications), "with_platform": with_platform,
+            "without_platform": len(week_classifications) - with_platform,
+            "in_top": platform_top_count, "outside_top": with_platform - platform_top_count,
+            "multiple": sum(len(values) > 1 for values in platform_sets),
+        },
         "docs_tariff": {
             "week_count": len(docs_tariff_week),
             "day_count": len(docs_tariff_day),
@@ -418,9 +449,9 @@ footer{margin-top:20px;color:var(--muted);font-size:13px;text-align:center}
     <div class="card donut-card"><h2>Категории — всего за неделю</h2>__DONUT_WEEK__<div class="legend">__LEGEND_WEEK__</div></div>
     <div class="card donut-card"><h2>Категории — всего за сутки</h2>__DONUT_DAY__<div class="legend">__LEGEND_DAY__</div></div>
     <div class="card"><h2>Топ-10 подкатегорий: проблемы и запросы (неделя)</h2>__BARS_SUB__
-      __DOCS_TARIFF_NOTE__
+      __DOCS_TARIFF_NOTE__ __SUB_COVERAGE__
     </div>
-    <div class="card"><h2>Платформы (неделя)</h2>__BARS_PLATFORMS__</div>
+    <div class="card"><h2>Платформы (неделя)</h2>__BARS_PLATFORMS__<p>__PLATFORM_COVERAGE__</p><p style="font-size:12px;color:var(--muted)">Одно обращение может учитываться в нескольких платформах: способах подключения, операционных системах, устройствах и браузерах. Поэтому сумма значений может превышать количество обращений.</p></div>
     <div class="card"><h2>Тяжесть обращений</h2>__SEVERITY__</div>
   </div>
   <div class="card" style="margin-top:14px"><h2>Топ-10 обращений высокой тяжести (неделя)</h2>__HIGH__</div>
@@ -455,6 +486,7 @@ def render_dashboard_html(data: dict, prefix: str = "") -> str:
     generated_dt = datetime.fromisoformat(data["generated_at"])
     generated = "Обновлено " + generated_dt.strftime("%d.%m.%Y %H:%M")
     periods = f"Неделя: {data['week']['period_label']} · День: {data['day']['period_label']}"
+    sub_note, platform_note = coverage_notes(data)
     return (
         _TEMPLATE
         .replace("__GENERATED__", _esc(generated))
@@ -466,12 +498,24 @@ def render_dashboard_html(data: dict, prefix: str = "") -> str:
         .replace("__DONUT_DAY__", donut_day)
         .replace("__LEGEND_DAY__", legend_day)
         .replace("__BARS_SUB__", _render_bars(data["subcategories"]))
+        .replace("__SUB_COVERAGE__", f"<p>{_esc(sub_note)}</p>")
+        .replace("__PLATFORM_COVERAGE__", _esc(platform_note))
         .replace("__DOCS_TARIFF_NOTE__", '<p style="font-size:12px;color:var(--muted)">Тариф «Для документов» учитывается по основной и дополнительным темам; одно обращение может входить также в другую строку рейтинга.</p>' if data.get("docs_tariff", {}).get("week_count") else "")
         .replace("__BARS_PLATFORMS__", _render_bars(data.get("platforms", [])[:TOP_PLATFORM_LIMIT]) or "Платформы не указаны.")
         .replace("__SEVERITY__", _render_severity(data["severity"]))
         .replace("__HIGH__", _render_high_cases(data))
         .replace("__RECOMMENDATIONS__", _render_recommendations(data["recommendations"]))
         .replace("__CATEGORIES__", _render_categories(data["categories"]))
+    )
+
+
+def coverage_notes(data: dict) -> tuple[str, str]:
+    sub = data.get("subcategory_coverage")
+    platforms = data.get("platform_coverage")
+    return (
+        (f"В топ-10: {sub['in_top']} из {sub['total']} уникальных обращений. Вне топ-10: {sub['outside_top']}." if sub else ""),
+        (f"Платформа определена в {platforms['with_platform']} из {platforms['total']} обращений; не указана — {platforms['without_platform']}. "
+         f"Топ-10 покрывает {platforms['in_top']} обращений; только вне топ-10 — {platforms['outside_top']}. Несколько платформ — {platforms['multiple']}." if platforms else ""),
     )
 
 

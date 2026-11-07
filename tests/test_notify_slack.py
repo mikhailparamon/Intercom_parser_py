@@ -242,7 +242,7 @@ def _merge_run(tmp_path, monkeypatch):
 
     week, day = _write_run(tmp_path)
     out = tmp_path / "run" / "support-analysis"
-    manifest = prepare_agents_bundle(week, day, out, workers=2)
+    manifest = prepare_agents_bundle(week, day, out, schema_version=1, workers=2)
     _fill_agent_results(manifest)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(config, "load_slack_settings",
@@ -283,7 +283,7 @@ def test_cli_merge_agents_skips_slack_without_settings(tmp_path, monkeypatch):
 
     week, day = _write_run(tmp_path)
     out = tmp_path / "run" / "support-analysis"
-    manifest = prepare_agents_bundle(week, day, out, workers=2)
+    manifest = prepare_agents_bundle(week, day, out, schema_version=1, workers=2)
     _fill_agent_results(manifest)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(config, "load_slack_settings", lambda: None)

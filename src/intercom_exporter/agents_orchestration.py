@@ -15,6 +15,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from .classification_catalog import SCHEMA_VERSION, canonical_classification, confirmed_platforms, get_subcategories
+
 from .other_review import review_other_classifications
 from .support_analysis import (
     AnalysisError,
@@ -123,6 +125,7 @@ def prepare_agents_bundle(
     taxonomy: list[dict] | None = None,
     taxonomy_source: str = "static_v5",
     service_id: str | None = None,
+    schema_version: int = SCHEMA_VERSION,
 ) -> dict[str, Any]:
     """Режет объединение week+day на чанки и готовит манифест оркестрации.
 
@@ -149,7 +152,10 @@ def prepare_agents_bundle(
         shutil.rmtree(work)
     work.mkdir(parents=True)
 
-    _write_json(work / "taxonomy.json", {"categories": taxonomy})
+    _write_json(work / "taxonomy.json", {
+        "categories": taxonomy, "subcategories": get_subcategories(service_id or "vpn"),
+        "classification_schema_version": schema_version, "service_id": service_id or "vpn",
+    })
 
     chunks = [conversations[i::workers] for i in range(workers)]
     chunk_entries = []
@@ -180,6 +186,8 @@ def prepare_agents_bundle(
 
     protocol_template = Path(__file__).with_name("agents_protocol.md").read_text(encoding="utf-8")
     manifest = {
+        "classification_schema_version": schema_version,
+        "service_id": service_id or "vpn",
         "workers": workers,
         "unique_conversation_count": len(conversations),
         "taxonomy_source": taxonomy_source,
@@ -210,6 +218,7 @@ def _normalized_classification(item: dict) -> dict:
         if isinstance(value, str) and value.strip()
     ))
     return {
+        **({"subcategory_code": item["subcategory_code"]} if "subcategory_code" in item else {}),
         "id": str(item["id"]),
         "category": item["category"],
         "subcategory": str(item.get("subcategory") or "—").strip() or "—",
@@ -246,6 +255,9 @@ def _apply_fixed_subcategory_rules(subcategory: str, conversation: dict | None) 
 
 def _finalize_classification(item: dict, conversation: dict | None) -> dict:
     normalized = _normalized_classification(item)
+    if "subcategory_code" in item:
+        normalized = canonical_classification(normalized, "vpn")
+        normalized["platforms"] = confirmed_platforms(conversation or {}, "vpn")
     normalized["subcategory"] = _apply_fixed_subcategory_rules(normalized["subcategory"], conversation)
     if (
         normalized["subcategory"] != DOCS_TARIFF_SUBCATEGORY
@@ -383,6 +395,10 @@ def _hypertube_customer_confirmed_device_context(conversation: dict | None) -> b
 
 def _finalize_hypertube_classification(item: dict, conversation: dict | None) -> dict:
     normalized = _normalized_classification(item)
+    if "subcategory_code" in item:
+        normalized = canonical_classification(normalized, "hypertube")
+        normalized["platforms"] = confirmed_platforms(conversation or {}, "hypertube")
+        return normalized
     normalized["subcategory"] = _apply_hypertube_fixed_subcategory_rules(normalized["subcategory"], conversation)
     normalized["subcategory"] = _refine_hypertube_unspecified_subcategory(
         normalized["subcategory"], normalized["category"], conversation,
@@ -451,14 +467,16 @@ def merge_agents_results(
     (топ категорий, высокая тяжесть, доля без оценки), чтобы отчёт и дашборд
     всегда содержали рекомендации; периодные разделы рекомендаций не заполняются.
     """
-    taxonomy = taxonomy or get_taxonomy(service_id)
-    billing_category = billing_category or get_billing_category(service_id)
     output = Path(output_dir)
     work = output / "agents_work"
     manifest_path = work / "manifest.json"
     if not manifest_path.is_file():
         raise AnalysisError(f"Манифест оркестрации не найден: {manifest_path}")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+    schema_version = manifest.get("classification_schema_version", 1)
+    service_id = service_id or manifest.get("service_id", "vpn")
+    taxonomy = taxonomy or get_taxonomy(service_id)
+    billing_category = billing_category or get_billing_category(service_id)
 
     week_rows = _read_conversations(week_input_path, allow_empty=True)
     day_rows = _read_conversations(day_input_path, allow_empty=True)
@@ -496,8 +514,15 @@ def merge_agents_results(
                 errors.append(f"{conversation_id}: категория не из таксономии: {item.get('category')!r}")
             if item.get("confidence") not in ("low", "medium", "high"):
                 errors.append(f"{conversation_id}: неверное confidence: {item.get('confidence')!r}")
+            if schema_version >= SCHEMA_VERSION:
+                try:
+                    item = canonical_classification(item, service_id)
+                except ValueError as exc:
+                    errors.append(f"{conversation_id}: {exc}")
             for field in ("platforms", "additional_topics"):
                 values = item.get(field, [])
+                if schema_version >= SCHEMA_VERSION and field not in item:
+                    errors.append(f"{conversation_id}: отсутствует обязательное поле {field}")
                 if not isinstance(values, list) or any(
                     not isinstance(value, str) or not value.strip() for value in values
                 ):
@@ -511,6 +536,7 @@ def merge_agents_results(
 
     review = review_other_classifications(
         merged, union_payload, output, taxonomy, manifest.get("workers", DEFAULT_WORKERS), service_id,
+        schema_version=schema_version,
     )
     if review["review_required"]:
         return {**review, "unique_conversation_count": len(union_ids)}
@@ -540,6 +566,8 @@ def merge_agents_results(
 
     loaded_recommendations = _load_recommendations(recommendations)
     result = {
+        "classification_schema_version": schema_version,
+        "service_id": service_id,
         "complete": True,
         "conversation_count": len(classifications),
         "dataset_fingerprint": union_payload["dataset_fingerprint"],

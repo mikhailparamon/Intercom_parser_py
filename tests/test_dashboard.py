@@ -43,6 +43,25 @@ def _classifications():
     ]
 
 
+def test_rankings_report_unique_coverage_and_keep_platforms_in_one_card():
+    rows = [{"id": str(i)} for i in range(13)]
+    items = [_classification(str(i), "Оплата", f"Подкатегория {i}", None) for i in range(13)]
+    for i, item in enumerate(items):
+        item["subcategory_code"] = f"code_{i}"
+        item["platforms"] = ["OpenVPN", "Windows"] if i < 8 else []
+    items[0]["platforms"] += ["OpenVPN", "Приложение VPN Наоборот"]
+    data = build_dashboard_data(rows, [], CATEGORIES, items, "week", "day")
+    assert data["subcategory_coverage"] == {"total": 13, "in_top": 10, "outside_top": 3}
+    assert len(data["all_subcategories"]) == 13
+    assert data["platform_coverage"] == {"total": 13, "with_platform": 8, "without_platform": 5, "in_top": 8, "outside_top": 0, "multiple": 8}
+    assert {p["name"]: p["count"] for p in data["platforms"]} == {"OpenVPN": 8, "Windows": 8, "Приложение VPN Наоборот": 1}
+    html = render_dashboard_html(data)
+    assert html.count("<h2>Платформы (неделя)</h2>") == 1
+    assert "Одно обращение может учитываться в нескольких платформах" in html
+    assert "Платформа определена в 8 из 13" in html
+    assert "Вне топ-10: 3" in html
+
+
 def test_build_dashboard_data_counts_windows_categories_and_severity():
     data = build_dashboard_data(_week_rows(), _day_rows(), CATEGORIES, _classifications(), "week label", "day label")
     assert data["kpis"]["week_total"] == 3
@@ -408,5 +427,5 @@ def test_dashboard_limits_platforms_to_top_ten():
     data = build_dashboard_data(rows, [], CATEGORIES, classifications, "w", "d")
 
     assert len(data["platforms"]) == 10
-    assert [item["name"] for item in data["platforms"]] == [f"Платформа {i}" for i in range(10)]
+    assert [item["name"] for item in data["platforms"]] == sorted([f"Платформа {i}" for i in range(11)], key=str.casefold)[:10]
     assert "Платформы" in render_dashboard_html(data)
