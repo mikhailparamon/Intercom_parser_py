@@ -341,6 +341,24 @@ def test_high_cases_list_day_window_first():
     assert [case["id"] for case in data["high_cases"]] == ["d_new", "w_old"]
 
 
+def test_high_cases_day_contains_only_day_window_high_severity():
+    week_rows = [
+        {"id": "w_old", "created_at": "2026-10-26T09:00:00Z", "updated_at": "2026-10-26T10:00:00Z"},
+        {"id": "d_high", "created_at": "2026-11-02T09:00:00Z", "updated_at": "2026-11-02T10:00:00Z"},
+        {"id": "d_low", "created_at": "2026-11-02T11:00:00Z", "updated_at": "2026-11-02T12:00:00Z"},
+    ]
+    day_rows = week_rows[1:]
+    classifications = [
+        _classification("w_old", "Подключение VPN", "Не подключается", "high"),
+        _classification("d_high", "Подключение VPN", "Не подключается", "high"),
+        _classification("d_low", "Подключение VPN", "Не подключается", "low"),
+    ]
+
+    data = build_dashboard_data(week_rows, day_rows, CATEGORIES, classifications, "w", "d")
+
+    assert [case["id"] for case in data["high_cases_day"]] == ["d_high"]
+
+
 def test_subcategories_are_not_forced_to_include_platforms():
     classifications = [
         _classification("w1", "Подключение VPN", "Не подключается", None),

@@ -436,12 +436,12 @@ def _default_recommendations(classifications: list[dict]) -> list[str]:
     high = sum(1 for item in classifications if item["severity"] == "high")
     if high:
         recommendations.append(
-            f"Обращений высокой тяжести: {high}. Разберите их вне очереди — это зона прямого оттока клиентов."
+            f"Обращений высокой критичности: {high}. Разберите их вне очереди — это зона прямого оттока клиентов."
         )
     unrated = sum(1 for item in classifications if item["severity"] is None)
     if unrated / total >= 0.2:
         recommendations.append(
-            f"У {unrated} обращений ({unrated / total * 100:.1f}%) тяжесть не оценена: просите операторов "
+            f"У {unrated} обращений ({unrated / total * 100:.1f}%) критичность не оценена: просите операторов "
             "фиксировать влияние на клиента при закрытии — это улучшит качество отчётов."
         )
     return recommendations
@@ -464,7 +464,7 @@ def merge_agents_results(
     Рекомендации — общие для отчёта: либо список строк, либо путь к JSON-файлу
     со списком строк (обычно формирует агент-оркестратор после слияния).
     Без них рекомендации выводятся детерминированно из статистики классификаций
-    (топ категорий, высокая тяжесть, доля без оценки), чтобы отчёт и дашборд
+    (топ категорий, высокая критичность, доля без оценки), чтобы отчёт и дашборд
     всегда содержали рекомендации; периодные разделы рекомендаций не заполняются.
     """
     output = Path(output_dir)
@@ -561,7 +561,7 @@ def merge_agents_results(
         sev = Counter(item["severity"] or "unknown" for item in subset)
         top = ", ".join(f"{name} — {count}" for name, count in cats.most_common(3))
         return (f"{label}: {len(subset)} обращений. Топ категорий: {top}. "
-                f"Тяжесть: high {sev.get('high', 0)}, medium {sev.get('medium', 0)}, "
+                f"Критичность: high {sev.get('high', 0)}, medium {sev.get('medium', 0)}, "
                 f"low {sev.get('low', 0)}, не оценена {sev.get('unknown', 0)}.")
 
     loaded_recommendations = _load_recommendations(recommendations)
@@ -647,7 +647,7 @@ def _write_comparison(reference_path: str | Path, result: dict, output: Path) ->
         "| Поле | Совпадений | Доля |", "|---|---:|---:|",
         f"| Категория | {cat_match} | {cat_match / total * 100:.1f}% |",
         f"| Подкатегория | {sub_match} | {sub_match / total * 100:.1f}% |",
-        f"| Тяжесть | {sev_match} | {sev_match / total * 100:.1f}% |",
+        f"| Критичность | {sev_match} | {sev_match / total * 100:.1f}% |",
         f"| Полное совпадение | {full} | {full / total * 100:.1f}% |",
         "", "## Матрица расхождений категорий (топ-20)", "",
         "| Было | Стало | Сколько |", "|---|---|---:|",
@@ -657,7 +657,7 @@ def _write_comparison(reference_path: str | Path, result: dict, output: Path) ->
         after_esc = str(after).replace("|", "\\|")
         lines.append(f"| {before_esc} | {after_esc} | {count} |")
     lines += ["", "## Список расхождений", "",
-              "| ID | Категория была | Категория стала | Подкат. была | Подкат. стала | Тяжесть была | Тяжесть стала |",
+              "| ID | Категория была | Категория стала | Подкат. была | Подкат. стала | Критичность была | Критичность стала |",
               "|---|---|---|---|---|---|---|"]
     for row in diffs:
         lines.append("| " + " | ".join(str(value).replace("|", "\\|") for value in row) + " |")

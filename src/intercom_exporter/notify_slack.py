@@ -56,15 +56,12 @@ def _new_today_text(daily: list[dict]) -> str:
     return text + f"{percent:+.1f}% к {_dd_mm(previous['date'])})"
 
 
-def _top_categories_text(title: str, categories: list[dict]) -> str:
-    """Строка вида 'Топ-3 категорий за сутки: 1. Имя — 35 (31.5%) 2. ... 3. ...'."""
+def _top_category_text(title: str, categories: list[dict]) -> str:
+    """Строка вида 'Топ-1 категория за сутки: Имя — 35 (31.5%)'."""
     if not categories:
         return f"{title}: нет данных"
-    items = " ".join(
-        f"{rank}. {entry['name']} — {entry['count']} ({entry['share']}%)"
-        for rank, entry in enumerate(categories[:3], start=1)
-    )
-    return f"{title}: {items}"
+    entry = categories[0]
+    return f"{title}: {entry['name']} — {entry['count']} ({entry['share']}%)"
 
 
 def _service_summary_block(service_id: str, data: dict) -> str:
@@ -75,12 +72,13 @@ def _service_summary_block(service_id: str, data: dict) -> str:
     change = _new_today_text(data.get("daily") or [])
     if change:
         day_line += f" {change}"
+    day_high = (data.get("severity", {}).get("day") or {}).get("high", 0)
     return "\n".join([
-        f"*{label}*",
-        day_line,
-        _top_categories_text("Топ-3 категорий за сутки", data.get("day_categories") or []),
-        f"За неделю: {_plural_conversations(kpis.get('week_total', 0))} всего",
-        _top_categories_text("Топ-3 категорий за неделю", data.get("week_categories") or []),
+        label,
+        f"{day_line}. {_top_category_text('Топ-1 категория за сутки', data.get('day_categories') or [])}"
+        f". Критичных обращений за сутки: {day_high}",
+        f"За неделю: {_plural_conversations(kpis.get('week_total', 0))} всего. "
+        f"{_top_category_text('Топ-1 категория за неделю', data.get('week_categories') or [])}",
     ])
 
 
@@ -96,11 +94,12 @@ def build_slack_summary(data: dict) -> str:
         change = _new_today_text(data.get("daily") or [])
         if change:
             day_line += f" {change}"
+        day_high = (data.get("severity", {}).get("day") or {}).get("high", 0)
         return "\n".join([
-            day_line,
-            _top_categories_text("Топ-3 категорий за сутки", data.get("day_categories") or []),
-            f"За неделю: {_plural_conversations(kpis.get('week_total', 0))} всего",
-            _top_categories_text("Топ-3 категорий за неделю", data.get("week_categories") or []),
+            f"{day_line}. {_top_category_text('Топ-1 категория за сутки', data.get('day_categories') or [])}"
+            f". Критичных обращений за сутки: {day_high}",
+            f"За неделю: {_plural_conversations(kpis.get('week_total', 0))} всего. "
+            f"{_top_category_text('Топ-1 категория за неделю', data.get('week_categories') or [])}",
         ])
     blocks = []
     for sid in SERVICES:

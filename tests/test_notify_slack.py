@@ -72,13 +72,11 @@ def test_build_slack_summary_formats_day_and_week_stats():
     text = build_slack_summary(_summary_data())
 
     assert text.splitlines() == [
-        "За сутки: 111 обращений всего (Новых за 03.11: 50 шт., -50.0% к 02.11)",
-        "Топ-3 категорий за сутки: 1. Проблемы подключения VPN — 35 (31.5%) "
-        "2. Оплата и подписка — 24 (21.6%) "
-        "3. Доступ к сайтам и сервисам — 12 (10.8%)",
-        "За неделю: 887 обращений всего",
-        "Топ-3 категорий за неделю: 1. Проблемы подключения VPN — 337 (38.0%) "
-        "2. Оплата и подписка — 176 (19.8%)",
+        "За сутки: 111 обращений всего (Новых за 03.11: 50 шт., -50.0% к 02.11). "
+        "Топ-1 категория за сутки: Проблемы подключения VPN — 35 (31.5%). "
+        "Критичных обращений за сутки: 0",
+        "За неделю: 887 обращений всего. "
+        "Топ-1 категория за неделю: Проблемы подключения VPN — 337 (38.0%)",
     ]
 
 
@@ -95,14 +93,18 @@ def test_build_slack_summary_skips_change_line_with_short_daily():
 
     text = build_slack_summary(data)
     assert "(Новых за" not in text
-    assert text.splitlines()[0] == "За сутки: 111 обращений всего"
+    assert text.splitlines()[0] == (
+        "За сутки: 111 обращений всего. "
+        "Топ-1 категория за сутки: Проблемы подключения VPN — 35 (31.5%). "
+        "Критичных обращений за сутки: 0"
+    )
 
 
 def test_build_slack_summary_combined_services():
     text = build_slack_summary({"vpn": _summary_data(), "hypertube": _summary_data()})
 
-    assert "*VPNНаоборот*" in text
-    assert "*HyperTube*" in text
+    assert "VPNНаоборот" in text
+    assert "HyperTube" in text
     assert "За сутки: 111 обращений всего" in text
 
 
@@ -110,7 +112,7 @@ def test_build_slack_summary_without_categories():
     data = _summary_data()
     data["day_categories"] = []
 
-    assert "Топ-3 категорий за сутки: нет данных" in build_slack_summary(data)
+    assert "Топ-1 категория за сутки: нет данных" in build_slack_summary(data)
 
 
 def test_send_dashboard_uploads_file_with_summary(tmp_path):

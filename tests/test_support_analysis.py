@@ -240,7 +240,7 @@ def test_report_counts_unique_conversations_and_writes_csv_and_markdown(tmp_path
     assert "platforms" in csv_rows[0]
     assert csv_rows[0]["platforms"] == ""
     assert "Частота проблем" in markdown
-    assert "Тяжесть по текстовым признакам" in markdown
+    assert "Критичность по текстовым признакам" in markdown
     assert "Проверить причины сбоев подключения." in markdown
 
 

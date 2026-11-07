@@ -162,6 +162,12 @@ def build_dashboard_data(
     ]
     high_cases_all.sort(key=lambda case: str(case["id"]) not in day_ids)
     high_cases = high_cases_all[:10]
+    high_cases_day = [
+        {"id": item["id"], "category": item["category"], "subcategory": item["subcategory"],
+         "problem_summary": item["problem_summary"]}
+        for item in day_classifications
+        if item["severity"] == "high"
+    ]
     top = week_categories[0] if week_categories else {"name": "—", "count": 0, "share": 0.0}
     billing_week = sum(
         entry["count"] for entry in week_categories
@@ -218,6 +224,7 @@ def build_dashboard_data(
         "severity": {"week": severity_week, "day": _severity_breakdown(day_classifications)},
         "high_cases": high_cases,
         "high_cases_total": len(high_cases_all),
+        "high_cases_day": high_cases_day,
         "categories": [{"name": item["name"], "description": item["description"]} for item in categories],
         "recommendations": {
             key: list((recommendations or {}).get(key) or [])
@@ -341,23 +348,17 @@ def _render_severity(severity: dict) -> str:
     return "".join(parts)
 
 
-def _render_high_cases(data: dict) -> str:
-    cases = data["high_cases"]
+def _render_high_cases_day(data: dict) -> str:
+    """Все обращения высокой критичности за сутки (скользящие 24 часа)."""
+    cases = data.get("high_cases_day") or []
     if not cases:
-        return "Обращений высокой тяжести нет."
-    shown = len(cases)
-    total = data.get("high_cases_total") or shown
-    note = (
-        f'<div style="font-size:12px;color:#6b7f88;margin-bottom:6px">'
-        f'Показано {shown} из {total} обращений высокой тяжести за неделю.</div>'
-        if total > shown else ""
-    )
+        return "Обращений высокой критичности за день нет."
     rows = "".join(
         f'<tr><td>{_esc(case["id"])}</td><td>{_esc(case["category"])}</td>'
         f'<td>{_esc(case["subcategory"])}</td><td>{_esc(case["problem_summary"])}</td></tr>'
         for case in cases
     )
-    return note + "<table><tr><th>ID</th><th>Категория</th><th>Подкатегория</th><th>Суть проблемы</th></tr>" + rows + "</table>"
+    return "<table><tr><th>ID</th><th>Категория</th><th>Подкатегория</th><th>Суть проблемы</th></tr>" + rows + "</table>"
 
 
 def _render_recommendations(recommendations: dict) -> str:
@@ -384,7 +385,7 @@ def _render_kpis(data: dict) -> str:
         ("Обращений за неделю", data["kpis"]["week_total"], ""),
         ("Обращений за день", data["kpis"]["day_total"], ""),
         ("Топ-категория недели", data["kpis"]["top_category"], f'{data["kpis"]["top_category_share"]}% недели'),
-        ("Высокая тяжесть (неделя)", data["kpis"]["high_week"], ""),
+        ("Высокая критичность (неделя)", data["kpis"]["high_week"], ""),
         ("Оплата и подписка (неделя)", data["kpis"]["billing_week"], ""),
     ]
     return "".join(
@@ -419,6 +420,9 @@ h1{font-size:26px}
 @media (max-width:720px){.grid{grid-template-columns:1fr}}
 .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px}
 .card h2{font-size:17px;margin-bottom:12px}
+details.card summary{cursor:pointer;font-size:17px;font-weight:600;color:var(--teal)}
+details.card summary::-webkit-details-marker{color:var(--teal)}
+details.card[open] summary{margin-bottom:12px}
 .legend{display:flex;flex-wrap:wrap;gap:8px;font-size:14px;margin-top:10px}
 .donut-card{display:flex;flex-wrap:wrap;align-items:center}
 .donut-card h2{width:100%}
@@ -452,12 +456,12 @@ footer{margin-top:20px;color:var(--muted);font-size:13px;text-align:center}
       __DOCS_TARIFF_NOTE__ __SUB_COVERAGE__
     </div>
     <div class="card"><h2>Платформы (неделя)</h2>__BARS_PLATFORMS__<p>__PLATFORM_COVERAGE__</p><p style="font-size:12px;color:var(--muted)">Одно обращение может учитываться в нескольких платформах: способах подключения, операционных системах, устройствах и браузерах. Поэтому сумма значений может превышать количество обращений.</p></div>
-    <div class="card"><h2>Тяжесть обращений</h2>__SEVERITY__</div>
+    <div class="card"><h2>Критичность обращений</h2>__SEVERITY__</div>
   </div>
-  <div class="card" style="margin-top:14px"><h2>Топ-10 обращений высокой тяжести (неделя)</h2>__HIGH__</div>
-  <div class="card" style="margin-top:14px"><h2>Рекомендации</h2>__RECOMMENDATIONS__</div>
-  <div class="card" style="margin-top:14px"><h2>Расшифровка категорий</h2>__CATEGORIES__</div>
-  <div class="card" style="margin-top:14px"><h2>Что такое тяжесть</h2>
+  <details class="card" style="margin-top:14px"><summary>Обращения высокой критичности (день)</summary>__HIGH_DAY__</details>
+  <details class="card" style="margin-top:14px"><summary>Рекомендации</summary>__RECOMMENDATIONS__</details>
+  <details class="card" style="margin-top:14px"><summary>Расшифровка категорий</summary>__CATEGORIES__</details>
+  <details class="card" style="margin-top:14px"><summary>Что такое критичность</summary>
     <table>
       <tr><th>Уровень</th><th>Значение</th></tr>
       <tr><td>Высокая (high)</td><td>Явно подтверждённое существенное длительное нарушение критичного сценария с описанным влиянием на клиента.</td></tr>
@@ -465,8 +469,8 @@ footer{margin-top:20px;color:var(--muted);font-size:13px;text-align:center}
       <tr><td>Низкая (low)</td><td>Вопрос, настройка, небольшое неудобство без серьёзного заявленного эффекта.</td></tr>
       <tr><td>Не оценена</td><td>В тексте обращения недостаточно данных о влиянии на клиента.</td></tr>
     </table>
-    <p style="margin-top:10px;font-size:12px;color:var(--muted)">Тяжесть — качественная оценка по тексту обращений: учитывается только влияние, описанное самим клиентом. Она не измеряет число затронутых клиентов, финансовый ущерб или технический масштаб проблемы.</p>
-  </div>
+    <p style="margin-top:10px;font-size:12px;color:var(--muted)">Критичность — качественная оценка по тексту обращений: учитывается только влияние, описанное самим клиентом. Она не измеряет число затронутых клиентов, финансовый ущерб или технический масштаб проблемы.</p>
+  </details>
   <footer>Сгенерировано автоматически: analyze_support.py report-monitoring</footer>
 </div>
 </body>
@@ -503,7 +507,7 @@ def render_dashboard_html(data: dict, prefix: str = "") -> str:
         .replace("__DOCS_TARIFF_NOTE__", '<p style="font-size:12px;color:var(--muted)">Тариф «Для документов» учитывается по основной и дополнительным темам; одно обращение может входить также в другую строку рейтинга.</p>' if data.get("docs_tariff", {}).get("week_count") else "")
         .replace("__BARS_PLATFORMS__", _render_bars(data.get("platforms", [])[:TOP_PLATFORM_LIMIT]) or "Платформы не указаны.")
         .replace("__SEVERITY__", _render_severity(data["severity"]))
-        .replace("__HIGH__", _render_high_cases(data))
+        .replace("__HIGH_DAY__", _render_high_cases_day(data))
         .replace("__RECOMMENDATIONS__", _render_recommendations(data["recommendations"]))
         .replace("__CATEGORIES__", _render_categories(data["categories"]))
     )
@@ -563,6 +567,9 @@ h1{font-size:26px}
 @media (max-width:720px){.grid{grid-template-columns:1fr}}
 .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px}
 .card h2{font-size:17px;margin-bottom:12px}
+details.card summary{cursor:pointer;font-size:17px;font-weight:600;color:var(--teal)}
+details.card summary::-webkit-details-marker{color:var(--teal)}
+details.card[open] summary{margin-bottom:12px}
 .legend{display:flex;flex-wrap:wrap;gap:8px;font-size:14px;margin-top:10px}
 .donut-card{display:flex;flex-wrap:wrap;align-items:center}
 .donut-card h2{width:100%}

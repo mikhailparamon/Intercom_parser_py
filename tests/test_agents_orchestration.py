@@ -476,7 +476,7 @@ def test_merge_agents_results_default_recommendations_flag_high_severity(tmp_pat
     outcome = merge_agents_results(week, day, out)
 
     merged = json.loads(Path(outcome["result_path"]).read_text(encoding="utf-8"))
-    assert any("высокой тяжести: 1" in item for item in merged["recommendations"])
+    assert any("высокой критичности: 1" in item for item in merged["recommendations"])
 
 
 def test_cli_research_merges_and_builds_dashboard(tmp_path, monkeypatch):
