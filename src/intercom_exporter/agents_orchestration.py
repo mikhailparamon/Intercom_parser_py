@@ -9,15 +9,21 @@ chatgpt_result.json и через generate_monitoring_report строит отч
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from .other_review import review_other_classifications
 from .support_analysis import (
     AnalysisError,
     _build_payload,
     _monitoring_prompt,
+    _normalize_problem_subcategory,
+    _normalize_platforms,
+    _docs_tariff_operator_evidence,
+    DOCS_TARIFF_SUBCATEGORY,
     _period_label,
     _read_conversations,
     _union_conversations,
@@ -39,34 +45,26 @@ TAXONOMY = [
      "description": "Низкая скорость, задержки, зависания, нестабильная работа и проблемы с качеством передачи данных."},
     {"name": "Ключи и конфигурации",
      "description": "Ключ не пришёл, не скачивается, не импортируется, не работает; требуется повторная выдача, замена ключа или сервера."},
-    {"name": "Оплата и управление подпиской",
+    {"name": "Оплата и подписка",
      "description": "Оплата не проходит или не распознаётся, неверное списание, возврат денег, отмена, продление и изменение подписки."},
     {"name": "Установка и настройка",
      "description": "Установка и обновление OpenVPN, настройка приложения или расширения, ошибки запуска, конфликты программ."},
     {"name": "Совместимость и ограничения",
      "description": "Поддержка устройств, операционных систем, роутеров, протоколов, стран, IP-адресов и особенностей подключения."},
-    {"name": "Авторизация и доступ к аккаунту",
+    {"name": "Авторизация и аккаунт",
      "description": "Не приходит код подтверждения, ошибка входа, проблемы с авторизацией через браузерное расширение или личный кабинет."},
     {"name": "Тарифы и вопросы о сервисе",
      "description": "Стоимость, выбор тарифа, условия использования, возможности сервиса, организационные вопросы и коммуникация с поддержкой."},
     {"name": "Прочие обращения",
-     "description": "Автоматические уведомления, спам, предложения о сотрудничестве, сообщения не по теме и обращения, в которых недостаточно информации."},
+     "description": "Нет запроса, автоматическое сообщение, спам, не по теме сервиса, вложение без описания или неустановимый предмет запроса после проверки всей переписки и заголовка. Неизвестная причина сбоя не основание для этой категории."},
 ]
 
-# KPI дашборда: категория «Оплата и управление подпиской». Не зависит от индекса в TAXONOMY.
-BILLING_CATEGORY = "Оплата и управление подпиской"
+# KPI дашборда: категория «Оплата и подписка». Не зависит от индекса в TAXONOMY.
+BILLING_CATEGORY = "Оплата и подписка"
 assert any(item["name"] == BILLING_CATEGORY for item in TAXONOMY), "BILLING_CATEGORY должна быть в TAXONOMY"
 
-# Фиксированные подкатегории, которые всегда присутствуют в дашборде.
-# Источник истины — раздел 3 шаблона support_analysis_prompt_template.md.
-FIXED_SUBCATEGORIES = [
-    'Тариф "Для документов"',
-    "Отмены",
-    "iOS-приложение",
-    "Android-приложение",
-    "Windows-приложение",
-    "Расширение",
-]
+# Подкатегории свободные и описывают проблему или запрос, а не платформу.
+FIXED_SUBCATEGORIES: list[str] = []
 
 # Фиксированная таксономия HyperTube v2 — синхронизирована с разделом 3 шаблона
 # support_analysis_prompt_template_hypertube.md. Менять только вместе с шаблоном.
@@ -82,7 +80,7 @@ HYPERTUBE_TAXONOMY = [
     {"name": "Приложение",
      "description": "Проблемы с мобильным или TV приложением HyperTube: не запускается, не подключается, вылетает, кэш, обновление приложения."},
     {"name": "Прочие обращения",
-     "description": "Системные уведомления, пустые сообщения, /start, спам, предложения, сообщения не по теме сервиса."},
+     "description": "Нет запроса, автоматическое сообщение, спам, не по теме сервиса, вложение без описания или неустановимый предмет запроса после проверки всей переписки и заголовка. Неизвестная причина сбоя не основание для этой категории."},
     {"name": "Скорость и качество видео",
      "description": "YouTube тормозит, лагает, медленная загрузка, низкое разрешение, постоянная буферизация."},
     {"name": "Авторизация и аккаунт",
@@ -94,17 +92,7 @@ HYPERTUBE_TAXONOMY = [
 ]
 HYPERTUBE_BILLING_CATEGORY = "Оплата и подписка"
 
-# Фиксированные подкатегории HyperTube, которые всегда присутствуют в дашборде.
-# Источник истины — раздел 3 шаблона support_analysis_prompt_template_hypertube.md.
-HYPERTUBE_FIXED_SUBCATEGORIES = [
-    "Отмены",
-    "Расширение Chrome",
-    "Расширение Яндекс",
-    "Расширение для др. браузеров",
-    "TV/приставка",
-    "Android-приложение",
-    "Windows-приложение",
-]
+HYPERTUBE_FIXED_SUBCATEGORIES: list[str] = []
 
 
 def get_taxonomy(service_id: str | None = None) -> list[dict]:
@@ -121,7 +109,7 @@ def get_billing_category(service_id: str | None = None) -> str:
 
 
 def get_fixed_subcategories(service_id: str | None = None) -> list[str]:
-    """Фиксированные подкатегории для сервиса."""
+    """Совместимость со старым API: платформенные подкатегории больше не фиксируются."""
     if service_id == "hypertube":
         return list(HYPERTUBE_FIXED_SUBCATEGORIES)
     return list(FIXED_SUBCATEGORIES)
@@ -206,6 +194,21 @@ def prepare_agents_bundle(
 
 
 def _normalized_classification(item: dict) -> dict:
+    platforms = item.get("platforms", [])
+    if not isinstance(platforms, list):
+        platforms = []
+    platforms = list(dict.fromkeys(
+        value.strip() for value in platforms
+        if isinstance(value, str) and value.strip()
+    ))
+    platforms = _normalize_platforms(platforms)
+    additional_topics = item.get("additional_topics", [])
+    if not isinstance(additional_topics, list):
+        additional_topics = []
+    additional_topics = list(dict.fromkeys(
+        value.strip() for value in additional_topics
+        if isinstance(value, str) and value.strip()
+    ))
     return {
         "id": str(item["id"]),
         "category": item["category"],
@@ -215,6 +218,8 @@ def _normalized_classification(item: dict) -> dict:
         "severity_reason": str(item.get("severity_reason") or "—").strip() or "—",
         "confidence": item["confidence"],
         "evidence": str(item.get("evidence") or ""),
+        "platforms": platforms,
+        "additional_topics": additional_topics,
     }
 
 
@@ -230,228 +235,158 @@ def _conversation_text(conversation: dict | None, roles: tuple[str, ...] = ("cus
 
 
 def _normalize_subcategory(value: str) -> str:
-    """Приводит известные варианты написания подкатегорий к каноническим именам."""
-    lowered = value.lower().strip().strip('"').strip("'").replace("—", "-")
-    if lowered in ("", "-", "нет"):
-        return value
-    if "для документов" in lowered or lowered in ("документы", "тариф документы"):
-        return 'Тариф "Для документов"'
-    if lowered.startswith("отмен") or "отпис" in lowered or "cancel" in lowered:
-        return "Отмены"
-    if any(token in lowered for token in ("ios", "iphone", "ipad", "айфон", "айпад")):
-        return "iOS-приложение"
-    if any(token in lowered for token in ("android", "андроид")):
-        return "Android-приложение"
-    if any(token in lowered for token in ("windows", "виндовс")):
-        return "Windows-приложение"
-    if "приложение" in lowered and ("пк" in lowered or "десктоп" in lowered):
-        return "Windows-приложение"
-    if "расширение" in lowered or "extension" in lowered:
-        return "Расширение"
-    return value
-
-
-def _is_document_tariff(text: str) -> bool:
-    """Маркеры ограничения тарифа «Для документов» в переписке (user + admin)."""
-    lowered = text.lower()
-    if "для документов" in lowered and ("для видео" in lowered or "персональн" in lowered):
-        return True
-    if "не предусмотрен тарифом" in lowered:
-        return True
-    if "альтернативн" in lowered and "openvpn" in lowered:
-        return True
-    payment_marker = any(
-        token in lowered
-        for token in ("подписка неактивна", "не активна подписка", "просит оплатить")
-    )
-    app_marker = any(
-        token in lowered
-        for token in ("приложени", "десктоп", "openvpn")
-    )
-    return payment_marker and app_marker
-
-
-def _is_cancel(text: str) -> bool:
-    lowered = text.lower()
-    return any(
-        token in lowered
-        for token in (
-            "отменить подписку",
-            "отмена подписки",
-            "отмените подписку",
-            "отмени подписку",
-            "отписаться",
-            "cancel my subscription",
-            "cancel subscription",
-        )
-    )
-
-
-def _is_ios(text: str) -> bool:
-    lowered = text.lower()
-    return any(token in lowered for token in ("ios", "iphone", "ipad", "айфон", "айпад"))
-
-
-def _is_android(text: str) -> bool:
-    lowered = text.lower()
-    return any(token in lowered for token in ("android", "андроид"))
-
-
-def _is_windows(text: str) -> bool:
-    lowered = text.lower()
-    if any(token in lowered for token in ("windows", "виндовс")):
-        return True
-    return "приложени" in lowered and ("пк" in lowered or "десктоп" in lowered)
-
-
-def _is_extension(text: str) -> bool:
-    lowered = text.lower()
-    return "расширени" in lowered or "extension" in lowered
+    """Нормализует очевидные варианты подкатегорий без замены их на платформу."""
+    return _normalize_problem_subcategory(value)
 
 
 def _apply_fixed_subcategory_rules(subcategory: str, conversation: dict | None) -> str:
-    """Нормализует подкатегорию и применяет фиксированные правила по тексту переписки.
-
-    Порядок приоритета (первое сработавшее правило побеждает):
-    1. Тариф "Для документов" (user + admin)
-    2. Отмены (user)
-    3. iOS-приложение (user)
-    4. Android-приложение (user)
-    5. Windows-приложение (user)
-    6. Расширение (user)
-    """
-    normalized = _normalize_subcategory(subcategory)
-    all_text = _conversation_text(conversation, roles=("customer", "operator", "bot", "unknown"))
-    user_text = _conversation_text(conversation, roles=("customer",))
-
-    if _is_document_tariff(all_text):
-        return 'Тариф "Для документов"'
-    if _is_cancel(user_text):
-        return "Отмены"
-    if _is_ios(user_text):
-        return "iOS-приложение"
-    if _is_android(user_text):
-        return "Android-приложение"
-    if _is_windows(user_text):
-        return "Windows-приложение"
-    if _is_extension(user_text):
-        return "Расширение"
-
-    return normalized if normalized in FIXED_SUBCATEGORIES else subcategory
+    """Сохраняет проблему из классификации; платформа берётся отдельным полем."""
+    return _normalize_subcategory(subcategory)
 
 
 def _finalize_classification(item: dict, conversation: dict | None) -> dict:
     normalized = _normalized_classification(item)
     normalized["subcategory"] = _apply_fixed_subcategory_rules(normalized["subcategory"], conversation)
+    if (
+        normalized["subcategory"] != DOCS_TARIFF_SUBCATEGORY
+        and DOCS_TARIFF_SUBCATEGORY not in normalized["additional_topics"]
+        and _docs_tariff_operator_evidence(conversation)
+    ):
+        normalized["additional_topics"].append(DOCS_TARIFF_SUBCATEGORY)
     return normalized
 
 
 def _normalize_hypertube_subcategory(value: str) -> str:
-    """Приводит известные варианты написания подкатегорий HyperTube к каноническим именам."""
-    lowered = value.lower().strip().strip('"').strip("'").replace("—", "-")
-    if lowered in ("", "-", "нет"):
-        return value
-    if lowered.startswith("отмен") or "отпис" in lowered or "cancel" in lowered:
-        return "Отмены"
-    if "chrome" in lowered or "хром" in lowered:
-        return "Расширение Chrome"
-    if "yandex" in lowered or "яндекс" in lowered:
-        return "Расширение Яндекс"
-    if any(token in lowered for token in ("firefox", "opera", "edge", "safari", "brave")):
-        return "Расширение для др. браузеров"
-    if any(token in lowered for token in ("android tv", "androidtv", "телевизор", "smart tv", "приставка", "тв", "tv")):
-        return "TV/приставка"
-    if "android" in lowered or "андроид" in lowered:
-        return "Android-приложение"
-    if "windows" in lowered or "виндовс" in lowered or "пк" in lowered or "компьютер" in lowered:
-        return "Windows-приложение"
-    return value
-
-
-def _hypertube_is_cancel(text: str) -> bool:
-    lowered = text.lower()
-    return any(
-        token in lowered
-        for token in (
-            "отменить подписку",
-            "отмена подписки",
-            "отмените подписку",
-            "отмени подписку",
-            "отписаться",
-            "cancel my subscription",
-            "cancel subscription",
-        )
-    )
-
-
-def _hypertube_is_chrome(text: str) -> bool:
-    lowered = text.lower()
-    return any(token in lowered for token in ("chrome", "хром", "google chrome", "chrome web store"))
-
-
-def _hypertube_is_yandex(text: str) -> bool:
-    lowered = text.lower()
-    return "yandex" in lowered or "яндекс" in lowered
-
-
-def _hypertube_is_other_browser(text: str) -> bool:
-    lowered = text.lower()
-    return any(token in lowered for token in ("firefox", "opera", "edge", "safari", "brave"))
-
-
-def _hypertube_is_tv(text: str) -> bool:
-    lowered = text.lower()
-    return any(token in lowered for token in ("телевизор", "smart tv", "приставка", "android tv", "тв", "tv"))
-
-
-def _hypertube_is_android(text: str) -> bool:
-    lowered = text.lower()
-    return "android" in lowered or "андроид" in lowered
-
-
-def _hypertube_is_windows(text: str) -> bool:
-    lowered = text.lower()
-    if any(token in lowered for token in ("windows", "виндовс")):
-        return True
-    return any(token in lowered for token in ("пк", "компьютер", "ноутбук"))
+    """Сохраняет смысловую подкатегорию HyperTube, нормализуя общие синонимы."""
+    return _normalize_subcategory(value)
 
 
 def _apply_hypertube_fixed_subcategory_rules(subcategory: str, conversation: dict | None) -> str:
-    """Нормализует подкатегорию и применяет фиксированные правила HyperTube по тексту переписки.
+    """Не выводит платформу из текста вместо содержательной подкатегории."""
+    return _normalize_hypertube_subcategory(subcategory)
 
-    Порядок приоритета (первое сработавшее правило побеждает):
-    1. Отмены
-    2. Расширение Chrome
-    3. Расширение Яндекс
-    4. Расширение для др. браузеров
-    5. TV/приставка
-    6. Android-приложение
-    7. Windows-приложение
-    """
-    normalized = _normalize_hypertube_subcategory(subcategory)
-    user_text = _conversation_text(conversation, roles=("customer",))
 
-    if _hypertube_is_cancel(user_text):
-        return "Отмены"
-    if _hypertube_is_chrome(user_text):
-        return "Расширение Chrome"
-    if _hypertube_is_yandex(user_text):
-        return "Расширение Яндекс"
-    if _hypertube_is_other_browser(user_text):
-        return "Расширение для др. браузеров"
-    if _hypertube_is_tv(user_text):
-        return "TV/приставка"
-    if _hypertube_is_android(user_text):
-        return "Android-приложение"
-    if _hypertube_is_windows(user_text):
-        return "Windows-приложение"
+def _refine_hypertube_unspecified_subcategory(
+    subcategory: str, category: str, conversation: dict | None,
+) -> str:
+    """Исправляет только явно распознаваемые симптомы HyperTube; не угадывает причину."""
+    if subcategory.strip().casefold() not in {
+        "проблема не уточнена", "не уточнена", "недостаточно контекста",
+    }:
+        return subcategory
 
-    return normalized if normalized in HYPERTUBE_FIXED_SUBCATEGORIES else subcategory
+    text = _conversation_text(conversation).casefold().replace("ё", "е")
+    negative = r"(?:не\s*(?:работ\w*|груз\w*|загружа\w*|открыва\w*|подключа\w*|запуска\w*|включа\w*)|перестал\w*\s+(?:работ\w*|открыва\w*)|сбо\w*|не\s+помога\w*)"
+
+    if category == "Доступ к YouTube":
+        if re.search(r"ускорени\w*.{0,50}" + negative + r"|" + negative + r".{0,50}ускорени\w*", text):
+            return "Ускорение не работает"
+        if re.search(
+            r"нет\s+(?:(?:подключени\w*|соединени\w*)\s+к\s+)?интернет\w*|"
+            r"ошибк\w*\s+подключени\w*\s+к\s+интернет\w*|интернет\w*\s+не\s+работ\w*",
+            text,
+        ):
+            return "Нет подключения к интернету"
+        if re.search(r"(?:видео|ролик\w*).{0,45}(?:не\s+(?:груз\w*|загружа\w*|открыва\w*)|буферизац\w*)", text):
+            return "Видео не загружается"
+        if re.search(r"(?:ютуб|youtube|hypertube|гипертуб).{0,60}" + negative + r"|" + negative + r".{0,60}(?:ютуб|youtube|hypertube|гипертуб)", text):
+            return "YouTube не работает"
+
+    if category == "Расширение браузера" and re.search(
+        r"расширени\w*.{0,70}" + negative + r"|" + negative + r".{0,70}расширени\w*", text,
+    ):
+        return "Расширение не работает"
+    if category == "Расширение браузера" and re.search(r"плох\w*.{0,20}работ\w*|нестабильн\w*.{0,30}работ\w*", text):
+        return "Расширение работает нестабильно"
+    if re.search(r"ad\s*block|адблок", text) and re.search(r"блокир\w*|блок\w*|блоч\w*", text):
+        if category == "Расширение браузера":
+            return "Конфликт с блокировщиком рекламы"
+
+    if category == "Приложение":
+        if re.search(r"кнопк\w*.{0,30}(?:нет|отсутств\w*)|(?:нет|отсутств\w*).{0,30}кнопк\w*.{0,30}подключ", text):
+            return "Кнопка подключения отсутствует"
+        if re.search(r"(?:когда|почему).{0,35}приложени\w*.{0,35}заработ\w*", text):
+            return "Приложение не работает"
+        if re.search(r"(?:все|всё|приложени\w*).{0,30}(?:висн\w*|завис\w*|тормоз\w*)", text):
+            return "Приложение зависает"
+        if re.search(r"подозрительн\w* трафик", text):
+            return "Ошибка подозрительного трафика"
+
+    if category == "Приложение":
+        if re.search(r"приложени\w*.{0,50}(?:завис\w*|висн\w*|тормоз\w*)", text):
+            return "Приложение зависает"
+        if re.search(r"приложени\w*.{0,70}" + negative + r"|" + negative + r".{0,70}приложени\w*", text):
+            return "Приложение не работает"
+
+    if category == "Скорость и качество видео":
+        if re.search(r"(?:низк\w* скорост\w*|медленн\w* загруз\w*|тормоз\w*|лаг\w*|буферизац\w*|завис\w*)", text):
+            return "Низкая скорость или буферизация"
+        if re.search(r"ускорени\w*.{0,50}" + negative + r"|" + negative + r".{0,50}ускорени\w*", text):
+            return "Ускорение не работает"
+
+    if category == "Установка и настройка" and re.search(r"(?:vpn|впн).{0,50}" + negative + r"|" + negative + r".{0,50}(?:vpn|впн)", text):
+        return "VPN не работает"
+
+    if category == "Оплата и подписка":
+        if re.search(r"(?:как|хочу|можно).{0,30}продл\w* подписк\w*|продл\w* подписк\w*", text):
+            return "Продление подписки"
+        if re.search(r"оплатил\w*.{0,50}(?:ничего не работает|не работает)|премиум.{0,40}(?:не груз\w*|не работает)|(?:не груз\w*|не работает).{0,40}премиум", text):
+            return "Проблема после оплаты"
+
+    if category == "Авторизация и аккаунт":
+        if re.search(r"код.{0,45}(?:не приш\w*|не получ\w*|не поступ\w*)|(?:не приш\w*|не получ\w*|не поступ\w*).{0,45}код", text):
+            return "Код не приходит"
+        if re.search(r"не могу войти|не получается войти|ошибк\w* вход\w*", text):
+            return "Ошибка входа"
+        if re.search(r"код.{0,35}для вход\w*", text) and re.search(negative, text):
+            return "Ошибка входа"
+
+    if category == "Установка и настройка" and re.search(r"переустанов\w*", text):
+        return "Переустановка приложения или расширения"
+
+    if category == "Доступ к YouTube" and _hypertube_customer_confirmed_device_context(conversation):
+        return "YouTube не работает"
+
+    # После чтения переписки категория уже фиксирует объект проблемы.
+    # Если клиент прямо сообщает «не работает», это достаточный симптом,
+    # даже если подробная техническая причина неизвестна.
+    if re.search(negative, text):
+        generic_symptoms = {
+            "Доступ к YouTube": "YouTube не работает",
+            "Расширение браузера": "Расширение не работает",
+            "Приложение": "Приложение не работает",
+        }
+        if category in generic_symptoms:
+            return generic_symptoms[category]
+
+    return subcategory
+
+
+def _hypertube_customer_confirmed_device_context(conversation: dict | None) -> bool:
+    """Recognize a device answer to support's YouTube question as confirmed context."""
+    if not conversation:
+        return False
+    messages = conversation.get("messages", [])
+    device_question_seen = False
+    for message in messages:
+        text = str(message.get("text", "")).casefold().replace("ё", "е")
+        if message.get("role") == "operator" and re.search(
+            r"на каком устройстве.{0,100}(?:не работает|не открывается).{0,30}(?:ютуб|youtube)", text,
+        ):
+            device_question_seen = True
+        elif device_question_seen and message.get("role") == "customer" and re.search(
+            r"\b(?:на компьютере|на ноутбуке|на телефоне|на телевизоре|на планшете|на пк)\b", text,
+        ):
+            return True
+    return False
 
 
 def _finalize_hypertube_classification(item: dict, conversation: dict | None) -> dict:
     normalized = _normalized_classification(item)
     normalized["subcategory"] = _apply_hypertube_fixed_subcategory_rules(normalized["subcategory"], conversation)
+    normalized["subcategory"] = _refine_hypertube_unspecified_subcategory(
+        normalized["subcategory"], normalized["category"], conversation,
+    )
     return normalized
 
 
@@ -561,6 +496,12 @@ def merge_agents_results(
                 errors.append(f"{conversation_id}: категория не из таксономии: {item.get('category')!r}")
             if item.get("confidence") not in ("low", "medium", "high"):
                 errors.append(f"{conversation_id}: неверное confidence: {item.get('confidence')!r}")
+            for field in ("platforms", "additional_topics"):
+                values = item.get(field, [])
+                if not isinstance(values, list) or any(
+                    not isinstance(value, str) or not value.strip() for value in values
+                ):
+                    errors.append(f"{conversation_id}: {field} должен быть списком непустых строк")
             merged[conversation_id] = item
     missing = [cid for cid in union_ids if cid not in merged]
     if missing:
@@ -568,6 +509,12 @@ def merge_agents_results(
     if errors:
         raise AnalysisError("Ошибки слияния результатов субагентов:\n- " + "\n- ".join(errors))
 
+    review = review_other_classifications(
+        merged, union_payload, output, taxonomy, manifest.get("workers", DEFAULT_WORKERS), service_id,
+    )
+    if review["review_required"]:
+        return {**review, "unique_conversation_count": len(union_ids)}
+    merged = review["classifications"]
     conversation_by_id = {str(c["id"]): c for c in union_payload["conversations"]}
     if service_id == "hypertube":
         classifications = [
@@ -630,6 +577,8 @@ def merge_agents_results(
         "classifications_path": report["classifications_path"],
         "dashboard_path": report["dashboard_path"],
     }
+    if "other_review_audit_path" in review:
+        outcome["other_review_audit_path"] = review["other_review_audit_path"]
     if compare_with:
         outcome["comparison_path"] = str(_write_comparison(compare_with, result, output))
     return outcome

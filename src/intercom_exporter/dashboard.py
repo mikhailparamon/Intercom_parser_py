@@ -10,15 +10,20 @@ from html import escape as _esc
 from pathlib import Path
 from typing import Any
 
-from .agents_orchestration import BILLING_CATEGORY, FIXED_SUBCATEGORIES
+from .agents_orchestration import BILLING_CATEGORY
 from .services import SERVICES
-from .support_analysis import _write_text
+from .support_analysis import DOCS_TARIFF_SUBCATEGORY, OTHER_CATEGORY, _normalize_platforms, _write_text
 
 PALETTE = [
     "#087f82", "#08a9df", "#f2a900", "#e4572e", "#7c5cbf", "#4caf7d",
     "#c94f7c", "#5b8def", "#8d6e63", "#607d8b", "#a3a948", "#d76d77",
 ]
 SEVERITY_ORDER = ("high", "medium", "low", "unknown")
+HIDDEN_PLATFORMS = {
+    "Linux", "Google TV", "Приложение VPN Наоборот", "Расширение другого браузера", "Роутер",
+}
+DOCS_TARIFF_LABEL = 'Тариф «Для документов»'
+TOP_PLATFORM_LIMIT = 10
 
 
 def _iso_date(value: Any) -> date | None:
@@ -102,29 +107,36 @@ def build_dashboard_data(
     week_classifications = [item for item in classifications if item["id"] in week_ids]
     day_classifications = [item for item in classifications if item["id"] in day_ids]
     week_categories = _category_breakdown(week_classifications)
-    subcategory_counts = Counter(item["subcategory"] for item in week_classifications)
-    if fixed_subcategories is None:
-        fixed_subcategories = FIXED_SUBCATEGORIES
-    if fixed_subcategories:
-        fixed = {name: subcategory_counts.get(name, 0) for name in fixed_subcategories}
-        free_sorted = sorted(
-            ((name, count) for name, count in subcategory_counts.items() if name not in fixed_subcategories),
-            key=lambda item: (-item[1], item[0].casefold()),
-        )
-        free_top = free_sorted[:max(10 - len(fixed_subcategories), 0)]
-        fixed_items = [(name, fixed[name]) for name in fixed_subcategories]
-        subcategories = [
-            {"name": name, "count": count}
-            for name, count in sorted(
-                fixed_items + free_top,
-                key=lambda item: (-item[1], item[0].casefold()),
-            )
-        ]
-    else:
-        subcategories = [
-            {"name": name, "count": count}
-            for name, count in sorted(subcategory_counts.items(), key=lambda item: (-item[1], item[0].casefold()))[:10]
-        ]
+    docs_tariff_week = [
+        item for item in week_classifications
+        if item["subcategory"] in {DOCS_TARIFF_SUBCATEGORY, DOCS_TARIFF_LABEL}
+        or {DOCS_TARIFF_SUBCATEGORY, DOCS_TARIFF_LABEL}.intersection(item.get("additional_topics", []))
+    ]
+    docs_tariff_day = [
+        item for item in day_classifications
+        if item["subcategory"] in {DOCS_TARIFF_SUBCATEGORY, DOCS_TARIFF_LABEL}
+        or {DOCS_TARIFF_SUBCATEGORY, DOCS_TARIFF_LABEL}.intersection(item.get("additional_topics", []))
+    ]
+    subcategory_counts = Counter(
+        item["subcategory"] for item in week_classifications
+        if item["subcategory"] not in {"Нет запроса", DOCS_TARIFF_SUBCATEGORY, DOCS_TARIFF_LABEL}
+    )
+    if docs_tariff_week:
+        subcategory_counts[DOCS_TARIFF_LABEL] = len(docs_tariff_week)
+    subcategories = [
+        {"name": name, "count": count}
+        for name, count in sorted(subcategory_counts.items(), key=lambda item: (-item[1], item[0].casefold()))[:10]
+    ]
+    platform_counts = Counter(
+        platform
+        for item in week_classifications
+        for platform in set(_normalize_platforms(item.get("platforms", [])))
+        if platform not in HIDDEN_PLATFORMS
+    )
+    platforms = [
+        {"name": name, "count": count}
+        for name, count in sorted(platform_counts.items(), key=lambda item: -item[1])[:TOP_PLATFORM_LIMIT]
+    ]
     severity_week = _severity_breakdown(week_classifications)
     high_cases_all = [
         {"id": item["id"], "category": item["category"], "subcategory": item["subcategory"],
@@ -155,6 +167,23 @@ def build_dashboard_data(
         "week_categories": week_categories,
         "day_categories": _category_breakdown(day_classifications),
         "subcategories": subcategories,
+        "platforms": platforms,
+        "docs_tariff": {
+            "week_count": len(docs_tariff_week),
+            "day_count": len(docs_tariff_day),
+            "examples": [
+                {"id": item["id"], "problem_summary": item["problem_summary"]}
+                for item in docs_tariff_week[:5]
+            ],
+        },
+        "other_breakdown": {
+            "week": dict(Counter(item["subcategory"] for item in week_classifications if item["category"] == OTHER_CATEGORY)),
+            "day": dict(Counter(item["subcategory"] for item in day_classifications if item["category"] == OTHER_CATEGORY)),
+        },
+        "other_examples": [
+            {"id": item["id"], "subcategory": item["subcategory"], "problem_summary": item["problem_summary"]}
+            for item in week_classifications if item["category"] == OTHER_CATEGORY
+        ][:5],
         "severity": {"week": severity_week, "day": _severity_breakdown(day_classifications)},
         "high_cases": high_cases,
         "high_cases_total": len(high_cases_all),
@@ -388,7 +417,10 @@ footer{margin-top:20px;color:var(--muted);font-size:13px;text-align:center}
     </div>
     <div class="card donut-card"><h2>Категории — всего за неделю</h2>__DONUT_WEEK__<div class="legend">__LEGEND_WEEK__</div></div>
     <div class="card donut-card"><h2>Категории — всего за сутки</h2>__DONUT_DAY__<div class="legend">__LEGEND_DAY__</div></div>
-    <div class="card"><h2>Топ-10 подкатегорий (неделя)</h2>__BARS_SUB__</div>
+    <div class="card"><h2>Топ-10 подкатегорий: проблемы и запросы (неделя)</h2>__BARS_SUB__
+      __DOCS_TARIFF_NOTE__
+    </div>
+    <div class="card"><h2>Платформы (неделя)</h2>__BARS_PLATFORMS__</div>
     <div class="card"><h2>Тяжесть обращений</h2>__SEVERITY__</div>
   </div>
   <div class="card" style="margin-top:14px"><h2>Топ-10 обращений высокой тяжести (неделя)</h2>__HIGH__</div>
@@ -434,6 +466,8 @@ def render_dashboard_html(data: dict, prefix: str = "") -> str:
         .replace("__DONUT_DAY__", donut_day)
         .replace("__LEGEND_DAY__", legend_day)
         .replace("__BARS_SUB__", _render_bars(data["subcategories"]))
+        .replace("__DOCS_TARIFF_NOTE__", '<p style="font-size:12px;color:var(--muted)">Тариф «Для документов» учитывается по основной и дополнительным темам; одно обращение может входить также в другую строку рейтинга.</p>' if data.get("docs_tariff", {}).get("week_count") else "")
+        .replace("__BARS_PLATFORMS__", _render_bars(data.get("platforms", [])[:TOP_PLATFORM_LIMIT]) or "Платформы не указаны.")
         .replace("__SEVERITY__", _render_severity(data["severity"]))
         .replace("__HIGH__", _render_high_cases(data))
         .replace("__RECOMMENDATIONS__", _render_recommendations(data["recommendations"]))
@@ -447,6 +481,7 @@ def write_dashboard(data: dict, output_dir: str | Path) -> Path:
     Рядом пишет dashboard_DD_MM_YYYY.json с теми же данными — из него
     notify_slack строит текст сообщения в Slack.
     """
+    data = {**data, "platforms": data.get("platforms", [])[:TOP_PLATFORM_LIMIT]}
     stamp = datetime.now(timezone.utc).strftime("%d_%m_%Y")
     output_path = Path(output_dir) / f"dashboard_{stamp}.html"
     _write_text(output_path, render_dashboard_html(data))

@@ -4,14 +4,13 @@ from pathlib import Path
 import pytest
 
 from intercom_exporter.agents_orchestration import (
-    FIXED_SUBCATEGORIES,
-    HYPERTUBE_FIXED_SUBCATEGORIES,
     TAXONOMY,
     _apply_fixed_subcategory_rules,
     _apply_hypertube_fixed_subcategory_rules,
     _conversation_text,
     _normalize_hypertube_subcategory,
     _normalize_subcategory,
+    _normalized_classification,
     merge_agents_results,
     prepare_agents_bundle,
 )
@@ -39,6 +38,11 @@ def test_prepare_agents_bundle_writes_chunks_manifest_and_protocol(tmp_path):
     assert (work / "taxonomy.json").is_file()
     assert (work / "manifest.json").is_file()
     assert (work / "agents_protocol.md").is_file()
+    protocol = (work / "agents_protocol.md").read_text(encoding="utf-8")
+    prompt = (out / "PROMPT.md").read_text(encoding="utf-8")
+    assert "platforms" in protocol and "additional_topics" in protocol
+    assert "Подкатегория описывает" in prompt
+    assert "Оплата сама по себе не означает неактивную подписку" in prompt
     taxonomy = json.loads((work / "taxonomy.json").read_text(encoding="utf-8"))["categories"]
     assert [item["name"] for item in taxonomy] == [item["name"] for item in TAXONOMY]
     assert len(taxonomy) == 10
@@ -53,6 +57,89 @@ def test_prepare_agents_bundle_writes_chunks_manifest_and_protocol(tmp_path):
     for entry in manifest["chunks"]:
         assert Path(entry["result_path"]).name.startswith("result_")
         assert entry["conversation_count"] > 0
+
+
+def test_hypertube_prompt_keeps_problem_and_platform_separate(tmp_path):
+    week = _write_conversations(tmp_path / "last_week", ["a"])
+    day = _write_conversations(tmp_path / "last_day", ["a"])
+    out = tmp_path / "support-analysis"
+    prepare_agents_bundle(week, day, out, workers=2, service_id="hypertube")
+    prompt = (out / "PROMPT.md").read_text(encoding="utf-8")
+    assert "На телевизоре бесконечно грузится видео" in prompt
+    assert "Нет подключения к интернету" in prompt
+    assert "additional_topics" in prompt
+    assert "YouTube не работает" in prompt
+    assert "Сначала уточни симптом по тексту клиента" in prompt
+
+
+def test_hypertube_resolves_generic_subcategory_from_explicit_customer_symptom():
+    from intercom_exporter.agents_orchestration import _refine_hypertube_unspecified_subcategory
+
+    conv = {"title": "", "messages": [{"role": "customer", "text": "Снова не работает Ютуб"}]}
+    assert _refine_hypertube_unspecified_subcategory(
+        "Проблема не уточнена", "Доступ к YouTube", conv
+    ) == "YouTube не работает"
+
+
+def test_hypertube_does_not_infer_symptom_from_operator_template_or_vague_text():
+    from intercom_exporter.agents_orchestration import _refine_hypertube_unspecified_subcategory
+
+    operator_only = {"title": "", "messages": [{"role": "operator", "text": "На каком устройстве не работает Ютуб?"}]}
+    vague = {"title": "", "messages": [{"role": "customer", "text": "Не работает"}]}
+    empty = {"title": "", "messages": []}
+    assert _refine_hypertube_unspecified_subcategory(
+        "Проблема не уточнена", "Доступ к YouTube", operator_only
+    ) == "Проблема не уточнена"
+    assert _refine_hypertube_unspecified_subcategory(
+        "Проблема не уточнена", "Доступ к YouTube", vague
+    ) == "YouTube не работает"
+    assert _refine_hypertube_unspecified_subcategory(
+        "Проблема не уточнена", "Доступ к YouTube", empty
+    ) == "Проблема не уточнена"
+
+
+@pytest.mark.parametrize(
+    ("category", "text", "expected"),
+    [
+        ("Расширение браузера", "Снова не работает расширение", "Расширение не работает"),
+        ("Приложение", "Приложение зависает", "Приложение зависает"),
+        ("Доступ к YouTube", "Вчера и сегодня не работает ускорение", "Ускорение не работает"),
+        ("Доступ к YouTube", "Видео не загружается", "Видео не загружается"),
+        ("Доступ к YouTube", "Пишет: нет подключения к интернету", "Нет подключения к интернету"),
+        ("Доступ к YouTube", "Не могу оплатить, сайт недоступен, с интернетом всё нормально; YouTube не работает", "YouTube не работает"),
+        ("Авторизация и аккаунт", "Мне не пришёл код", "Код не приходит"),
+        ("Расширение браузера", "Не работает на компьютере", "Расширение не работает"),
+        ("Приложение", "Здравствуйте, не работает", "Приложение не работает"),
+        ("Приложение", "А почему нету кнопки подключить?", "Кнопка подключения отсутствует"),
+        ("Расширение браузера", "Плохо работает расширение оплаченное", "Расширение работает нестабильно"),
+        ("Расширение браузера", "На расширении YouTube перестал открываться", "Расширение не работает"),
+        ("Оплата и подписка", "Как можно продлить подписку?", "Продление подписки"),
+        ("Оплата и подписка", "Оплатил, но ничего не работает", "Проблема после оплаты"),
+        ("Установка и настройка", "Здравствуйте, не работает впн", "VPN не работает"),
+        ("Авторизация и аккаунт", "Не работает. Используйте код для входа в аккаунт", "Ошибка входа"),
+        ("Расширение браузера", "Спасибо, видимо AdBlock блочил", "Конфликт с блокировщиком рекламы"),
+        ("Установка и настройка", "Обычная переустановка?", "Переустановка приложения или расширения"),
+    ],
+)
+def test_hypertube_refines_explicit_symptoms(category, text, expected):
+    from intercom_exporter.agents_orchestration import _refine_hypertube_unspecified_subcategory
+
+    conv = {"title": "", "messages": [{"role": "customer", "text": text}]}
+    assert _refine_hypertube_unspecified_subcategory(
+        "Проблема не уточнена", category, conv
+    ) == expected
+
+
+def test_hypertube_uses_customer_confirmation_after_operator_context():
+    from intercom_exporter.agents_orchestration import _refine_hypertube_unspecified_subcategory
+
+    conv = {"title": "", "messages": [
+        {"role": "operator", "text": "На каком устройстве не работает Ютуб?"},
+        {"role": "customer", "text": "На компьютере"},
+    ]}
+    assert _refine_hypertube_unspecified_subcategory(
+        "Проблема не уточнена", "Доступ к YouTube", conv
+    ) == "YouTube не работает"
 
 
 def _fill_results(manifest, category="Проблемы подключения VPN", skip_worker=None):
@@ -423,48 +510,38 @@ def _conv(customer_text="", operator_text=""):
 
 
 @pytest.mark.parametrize("raw,expected", [
-    ('Тариф "Для документов"', 'Тариф "Для документов"'),
-    ("IOS", "iOS-приложение"),
-    ("Iphone", "iOS-приложение"),
-    ("айфон", "iOS-приложение"),
-    ("Айпад", "iOS-приложение"),
-    ("Отмена подписки", "Отмены"),
-    ("отменить", "Отмены"),
-    ("Андроид", "Android-приложение"),
-    ("Android app", "Android-приложение"),
-    ("Приложение на ПК", "Windows-приложение"),
-    ("windows", "Windows-приложение"),
-    ("Виндовс", "Windows-приложение"),
-    ("Браузерное расширение", "Расширение"),
-    ("Extension", "Расширение"),
+    ("Отмена подписки", "Отмена подписки"),
+    ("отменить подписку", "Отмена подписки"),
+    ("iOS-приложение", "iOS-приложение"),
+    ("Расширение Chrome", "Расширение Chrome"),
+    ("Подписка не активна", "Подписка не активна"),
+    ("Сайт не открывается", "Сайт или сервис недоступен"),
+    ("Сервис недоступен", "Сайт или сервис недоступен"),
 ])
 def test_normalize_subcategory_maps_variants(raw, expected):
     assert _normalize_subcategory(raw) == expected
 
 
-def test_apply_rules_prioritizes_document_tariff_over_cancel():
+def test_operator_tariff_instruction_does_not_override_customer_request():
     conv = _conv(
         customer_text="хочу отменить подписку",
         operator_text='У вас тариф "Для документов", приложение работает только на тарифах "Для Видео" и "Персональный"',
     )
-    assert _apply_fixed_subcategory_rules("Отмена подписки", conv) == 'Тариф "Для документов"'
+    assert _apply_fixed_subcategory_rules("Отмена подписки", conv) == "Отмена подписки"
 
 
 def test_apply_rules_prioritizes_cancel_over_ios():
     conv = _conv(customer_text="хочу отменить подписку, у меня iPhone")
-    assert _apply_fixed_subcategory_rules("iOS-приложение", conv) == "Отмены"
+    assert _apply_fixed_subcategory_rules("Отмена подписки", conv) == "Отмена подписки"
 
 
 def test_apply_rules_detects_cancel_in_non_billing_category():
     conv = _conv(customer_text="отмените подписку, VPN не подключается")
-    assert _apply_fixed_subcategory_rules("Не подключается", conv) == "Отмены"
+    assert _apply_fixed_subcategory_rules("Отмена подписки", conv) == "Отмена подписки"
 
 
-def test_apply_rules_detects_platform_markers():
-    assert _apply_fixed_subcategory_rules("Другое", _conv(customer_text="не работает на айфоне")) == "iOS-приложение"
-    assert _apply_fixed_subcategory_rules("Другое", _conv(customer_text="андроид не подключается")) == "Android-приложение"
-    assert _apply_fixed_subcategory_rules("Другое", _conv(customer_text="приложение на ПК не запускается")) == "Windows-приложение"
-    assert _apply_fixed_subcategory_rules("Другое", _conv(customer_text="не работает расширение в браузере")) == "Расширение"
+def test_apply_rules_does_not_infer_subcategory_from_platform_markers():
+    assert _apply_fixed_subcategory_rules("Проблема не уточнена", _conv(customer_text="не работает на айфоне")) == "Проблема не уточнена"
 
 
 def test_apply_rules_keeps_unknown_subcategory_without_markers():
@@ -472,18 +549,81 @@ def test_apply_rules_keeps_unknown_subcategory_without_markers():
     assert _apply_fixed_subcategory_rules("Благодарность", conv) == "Благодарность"
 
 
+@pytest.mark.parametrize("raw,expected", [
+    ("Код не приходит", "Код не приходит"),
+    ("Ошибка входа", "Ошибка входа"),
+    ("Видео не загружается", "Видео не загружается"),
+    ("Низкая скорость", "Низкая скорость"),
+])
+def test_platform_mentions_never_replace_problem_subcategory(raw, expected):
+    conv = _conv(customer_text="В Chrome на iPhone после оплаты видео не загружается")
+    assert _apply_fixed_subcategory_rules(raw, conv) == expected
+    assert _apply_hypertube_fixed_subcategory_rules(raw, conv) == expected
+
+
+def test_finalization_keeps_legacy_results_and_normalizes_platforms():
+    legacy = {"id": "a", "category": "Проблемы подключения VPN", "subcategory": "Ошибка входа",
+              "confidence": "high"}
+    assert _normalized_classification(legacy)["platforms"] == []
+    modern = {**legacy, "platforms": [" iOS ", "неизвестный клиент", "iOS"]}
+    assert _normalized_classification(modern)["platforms"] == ["iOS", "неизвестный клиент"]
+
+
+def test_finalization_collapses_platform_aliases():
+    item = {
+        "id": "c1", "category": "Оплата и подписка", "subcategory": "Отмена подписки",
+        "platforms": ["OpenVPN Connect", "OpenVPN", "Windows 11", "Mac OS", "Расширение Chrome"],
+        "problem_summary": "Запрос отмены", "severity": None, "severity_reason": "—",
+        "confidence": "high", "evidence": "Хочу отменить",
+    }
+
+    assert _normalized_classification(item)["platforms"] == ["OpenVPN", "Windows", "macOS", "Расширение Chrome"]
+
+
+def test_finalization_adds_tariff_restriction_without_overriding_refund():
+    from intercom_exporter.agents_orchestration import _finalize_classification
+    item = {
+        "id": "c1", "category": "Оплата и подписка", "subcategory": "Возврат денег",
+        "problem_summary": "Вернуть деньги", "severity": None, "confidence": "high",
+    }
+    conversation = {"messages": [{"role": "operator", "text": 'Доступ к приложению не предусмотрен тарифом «Для документов».'}]}
+
+    result = _finalize_classification(item, conversation)
+
+    assert result["subcategory"] == "Возврат денег"
+    assert result["additional_topics"] == ['Ограничение тарифа «Для документов»']
+
+
+def test_merge_preserves_problem_and_separates_platforms(tmp_path):
+    week = _write_conversations(tmp_path / "last_week", ["a"])
+    day = _write_conversations(tmp_path / "last_day", ["a"])
+    out = tmp_path / "support-analysis"
+    manifest = prepare_agents_bundle(week, day, out, workers=2)
+    _fill_results(manifest)
+    for entry in manifest["chunks"]:
+        chunk = json.loads(Path(entry["chunk_path"]).read_text(encoding="utf-8"))
+        Path(entry["result_path"]).write_text(json.dumps({"classifications": [
+            {"id": row["id"], "category": "Проблемы подключения VPN", "subcategory": "Низкая скорость",
+             "platforms": [" Android ", "неизвестная платформа", "Android"], "problem_summary": "Падает соединение", "severity": None,
+             "severity_reason": "не уточнено", "confidence": "high", "evidence": "VPN отключается"}
+            for row in chunk["conversations"]]}, ensure_ascii=False), encoding="utf-8")
+    outcome = merge_agents_results(week, day, out)
+    result = json.loads(Path(outcome["result_path"]).read_text(encoding="utf-8"))
+    assert result["classifications"][0]["subcategory"] == "Низкая скорость"
+    assert result["classifications"][0]["platforms"] == ["Android", "неизвестная платформа"]
+
+
 def test_apply_rules_detects_document_tariff_by_admin_marker():
     conv = _conv(
         customer_text="подписка неактивна",
         operator_text='Для документов не предусмотрено приложение, используйте OpenVPN Connect',
     )
-    assert _apply_fixed_subcategory_rules("Оплата не распознана", conv) == 'Тариф "Для документов"'
+    assert _apply_fixed_subcategory_rules("Подписка не активировалась", conv) == "Подписка не активировалась"
 
 
-def test_fixed_subcategories_list_has_six_items():
-    assert len(FIXED_SUBCATEGORIES) == 6
-    assert 'Тариф "Для документов"' in FIXED_SUBCATEGORIES
-    assert "Отмены" in FIXED_SUBCATEGORIES
+def test_subcategories_are_not_a_fixed_platform_list():
+    from intercom_exporter.agents_orchestration import get_fixed_subcategories
+    assert get_fixed_subcategories() == []
 
 
 def test_merge_agents_results_applies_fixed_subcategory_rules(tmp_path):
@@ -499,21 +639,21 @@ def test_merge_agents_results_applies_fixed_subcategory_rules(tmp_path):
         for conv in chunk["conversations"]:
             if conv["id"] == "a":
                 items.append({
-                    "id": "a", "category": "Оплата и управление подпиской",
-                    "subcategory": "IOS", "problem_summary": "—",
+                    "id": "a", "category": "Оплата и подписка",
+                    "subcategory": "Ошибка входа", "platforms": ["iOS"], "problem_summary": "—",
                     "severity": None, "severity_reason": "—",
                     "confidence": "high", "evidence": "",
                 })
             elif conv["id"] == "b":
                 items.append({
                     "id": "b", "category": "Проблемы подключения VPN",
-                    "subcategory": "Айфон", "problem_summary": "—",
+                    "subcategory": "Код не приходит", "platforms": ["iOS"], "problem_summary": "—",
                     "severity": None, "severity_reason": "—",
                     "confidence": "high", "evidence": "",
                 })
             else:
                 items.append({
-                    "id": conv["id"], "category": "Прочие обращения",
+                    "id": conv["id"], "category": "Установка и настройка",
                     "subcategory": "—", "problem_summary": "—",
                     "severity": None, "severity_reason": "—",
                     "confidence": "low", "evidence": "",
@@ -525,8 +665,9 @@ def test_merge_agents_results_applies_fixed_subcategory_rules(tmp_path):
 
     result = json.loads(Path(outcome["result_path"]).read_text(encoding="utf-8"))
     by_id = {item["id"]: item for item in result["classifications"]}
-    assert by_id["a"]["subcategory"] == "iOS-приложение"
-    assert by_id["b"]["subcategory"] == "iOS-приложение"
+    assert by_id["a"]["subcategory"] == "Ошибка входа"
+    assert by_id["b"]["subcategory"] == "Код не приходит"
+    assert by_id["b"]["platforms"] == ["iOS"]
 
 
 def _hypertube_conv(customer_text="", operator_text=""):
@@ -539,21 +680,10 @@ def _hypertube_conv(customer_text="", operator_text=""):
 
 
 @pytest.mark.parametrize("raw,expected", [
-    ("Отмена подписки", "Отмены"),
-    ("отменить", "Отмены"),
-    ("Chrome", "Расширение Chrome"),
-    ("хром", "Расширение Chrome"),
-    ("Расширение в Chrome", "Расширение Chrome"),
-    ("Yandex", "Расширение Яндекс"),
-    ("яндекс", "Расширение Яндекс"),
-    ("Opera", "Расширение для др. браузеров"),
-    ("Edge", "Расширение для др. браузеров"),
-    ("Android TV", "TV/приставка"),
-    ("телевизор", "TV/приставка"),
-    ("Android", "Android-приложение"),
-    ("андроид", "Android-приложение"),
-    ("Windows", "Windows-приложение"),
-    ("ПК", "Windows-приложение"),
+    ("Отмена подписки", "Отмена подписки"),
+    ("Расширение Chrome", "Расширение Chrome"),
+    ("Android", "Android"),
+    ("TV/приставка", "TV/приставка"),
 ])
 def test_normalize_hypertube_subcategory_maps_variants(raw, expected):
     assert _normalize_hypertube_subcategory(raw) == expected
@@ -561,32 +691,32 @@ def test_normalize_hypertube_subcategory_maps_variants(raw, expected):
 
 def test_hypertube_rules_prioritize_cancel():
     conv = _hypertube_conv(customer_text="хочу отменить подписку, у меня chrome")
-    assert _apply_hypertube_fixed_subcategory_rules("Chrome", conv) == "Отмены"
+    assert _apply_hypertube_fixed_subcategory_rules("Отмена подписки", conv) == "Отмена подписки"
 
 
 def test_hypertube_rules_prioritize_chrome_over_other_browsers():
     conv = _hypertube_conv(customer_text="не работает в chrome и opera")
-    assert _apply_hypertube_fixed_subcategory_rules("Opera", conv) == "Расширение Chrome"
+    assert _apply_hypertube_fixed_subcategory_rules("Видео не загружается", conv) == "Видео не загружается"
 
 
 def test_hypertube_rules_detects_yandex():
     conv = _hypertube_conv(customer_text="не работает в яндекс браузере")
-    assert _apply_hypertube_fixed_subcategory_rules("Расширение", conv) == "Расширение Яндекс"
+    assert _apply_hypertube_fixed_subcategory_rules("Проблема не уточнена", conv) == "Проблема не уточнена"
 
 
 def test_hypertube_rules_detects_tv():
     conv = _hypertube_conv(customer_text="не работает на телевизоре")
-    assert _apply_hypertube_fixed_subcategory_rules("Другое", conv) == "TV/приставка"
+    assert _apply_hypertube_fixed_subcategory_rules("Проблема не уточнена", conv) == "Проблема не уточнена"
 
 
 def test_hypertube_rules_detects_android():
     conv = _hypertube_conv(customer_text="не работает на андроид")
-    assert _apply_hypertube_fixed_subcategory_rules("Приложение", conv) == "Android-приложение"
+    assert _apply_hypertube_fixed_subcategory_rules("Проблема не уточнена", conv) == "Проблема не уточнена"
 
 
 def test_hypertube_rules_detects_windows():
     conv = _hypertube_conv(customer_text="не работает на компьютере")
-    assert _apply_hypertube_fixed_subcategory_rules("Другое", conv) == "Windows-приложение"
+    assert _apply_hypertube_fixed_subcategory_rules("Проблема не уточнена", conv) == "Проблема не уточнена"
 
 
 def test_hypertube_rules_keeps_unknown_without_markers():
@@ -594,11 +724,14 @@ def test_hypertube_rules_keeps_unknown_without_markers():
     assert _apply_hypertube_fixed_subcategory_rules("Благодарность", conv) == "Благодарность"
 
 
-def test_hypertube_fixed_subcategories_list_has_seven_items():
-    assert len(HYPERTUBE_FIXED_SUBCATEGORIES) == 7
-    assert "Отмены" in HYPERTUBE_FIXED_SUBCATEGORIES
-    assert "Расширение Chrome" in HYPERTUBE_FIXED_SUBCATEGORIES
-    assert "TV/приставка" in HYPERTUBE_FIXED_SUBCATEGORIES
+def test_hypertube_problem_subcategory_survives_platform_and_subscription_mentions():
+    conv = _hypertube_conv(customer_text='На телевизоре подписка активна, но YouTube пишет «нет интернета»')
+    assert _apply_hypertube_fixed_subcategory_rules("Нет подключения к интернету", conv) == "Нет подключения к интернету"
+
+
+def test_hypertube_subcategories_are_not_a_fixed_platform_list():
+    from intercom_exporter.agents_orchestration import get_fixed_subcategories
+    assert get_fixed_subcategories("hypertube") == []
 
 
 def test_merge_agents_results_applies_hypertube_fixed_subcategory_rules(tmp_path):
@@ -614,20 +747,20 @@ def test_merge_agents_results_applies_hypertube_fixed_subcategory_rules(tmp_path
             if conv["id"] == "a":
                 items.append({
                     "id": "a", "category": "Оплата и подписка",
-                    "subcategory": "Chrome", "problem_summary": "—",
+                    "subcategory": "Возврат денег", "platforms": ["Расширение Chrome"], "problem_summary": "—",
                     "severity": None, "severity_reason": "—",
                     "confidence": "high", "evidence": "",
                 })
             elif conv["id"] == "b":
                 items.append({
                     "id": "b", "category": "Приложение",
-                    "subcategory": "Андроид", "problem_summary": "—",
+                    "subcategory": "Видео не загружается", "platforms": ["Android"], "problem_summary": "—",
                     "severity": None, "severity_reason": "—",
                     "confidence": "high", "evidence": "",
                 })
             else:
                 items.append({
-                    "id": conv["id"], "category": "Прочие обращения",
+                    "id": conv["id"], "category": "Установка и настройка",
                     "subcategory": "—", "problem_summary": "—",
                     "severity": None, "severity_reason": "—",
                     "confidence": "low", "evidence": "",
@@ -639,5 +772,6 @@ def test_merge_agents_results_applies_hypertube_fixed_subcategory_rules(tmp_path
 
     result = json.loads(Path(outcome["result_path"]).read_text(encoding="utf-8"))
     by_id = {item["id"]: item for item in result["classifications"]}
-    assert by_id["a"]["subcategory"] == "Расширение Chrome"
-    assert by_id["b"]["subcategory"] == "Android-приложение"
+    assert by_id["a"]["subcategory"] == "Возврат денег"
+    assert by_id["b"]["subcategory"] == "Видео не загружается"
+    assert by_id["a"]["platforms"] == ["Расширение Chrome"]

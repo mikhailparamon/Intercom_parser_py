@@ -47,6 +47,168 @@ _DEVICE_SIGNATURE_RE = re.compile(
 )
 _SEVERITIES = {"low", "medium", "high"}
 _CONFIDENCE = {"low", "medium", "high"}
+OTHER_CATEGORY = "Прочие обращения"
+DOCS_TARIFF_SUBCATEGORY = "Ограничение тарифа «Для документов»"
+OTHER_SUBCATEGORIES = (
+    "Нет запроса", "Автоматическое сообщение", "Спам", "Не по теме сервиса",
+    "Только вложение без описания", "Недостаточно контекста",
+)
+
+
+def _docs_tariff_operator_evidence(conversation: dict | None) -> list[str]:
+    """Find explicit app restrictions confirmed by an operator, not mere plan mentions."""
+    evidence = []
+    for message in (conversation or {}).get("messages", []):
+        if message.get("role") != "operator":
+            continue
+        body = message.get("text", "")
+        text = re.sub(r"<[^>]+>", " ", body).casefold()
+        text = re.sub(r"[^\w\s]", " ", text)
+        text = re.sub(r"\s+", " ", text)
+        if not re.search(r"для документ\w*", text) or "приложени" not in text:
+            continue
+        explicit_denial = re.search(
+            r"приложени.{0,120}(?:не предусмотр|не доступ|недоступ|работать не будут|не будут работать)", text,
+        )
+        higher_plan_required = "для видео" in text and re.search(
+            r"приложени.{0,100}работает (?:только )?(?:на тариф|начиная|только при подключении)", text,
+        )
+        minimum_plan = re.search(
+            r"чтобы работало.{0,40}приложени.{0,80}нужна подписка минимум", text,
+        )
+        if explicit_denial or higher_plan_required or minimum_plan:
+            evidence.append(body)
+    return evidence
+
+
+def _normalize_problem_subcategory(value: str) -> str:
+    """Normalize exact aliases while keeping platforms out of problem labels."""
+    lowered = value.lower().strip().strip('"').strip("'").replace("—", "-")
+    aliases = {
+        "отмена": "Отмена подписки",
+        "отмены": "Отмена подписки",
+        "отмена подписки": "Отмена подписки",
+        "отменить подписку": "Отмена подписки",
+        "отмените подписку": "Отмена подписки",
+        "отмени подписку": "Отмена подписки",
+        "cancel subscription": "Отмена подписки",
+        "cancel my subscription": "Отмена подписки",
+        "не приходит код": "Код не приходит",
+        "код не поступает": "Код не приходит",
+        "видео не грузится": "Видео не загружается",
+        "видео незагружается": "Видео не загружается",
+        "не подключается vpn": "VPN не подключается",
+        "vpn не подключается": "VPN не подключается",
+        "сайт не открывается": "Сайт или сервис недоступен",
+        "сайт недоступен": "Сайт или сервис недоступен",
+        "сервис недоступен": "Сайт или сервис недоступен",
+        "сервис не открывается": "Сайт или сервис недоступен",
+    }
+    return aliases.get(lowered, value.strip())
+
+
+def _normalize_platforms(values: list[str], context: str = "") -> list[str]:
+    """Collapse platform aliases to stable product, OS, and browser groups."""
+    result: list[str] = []
+    context_lower = context.casefold()
+    full_evidence = f"{' '.join(values).casefold()} {context_lower}"
+    desktop_os = (
+        (r"\b(?:windows|win\s*10|win\s*11)\b", "Windows"),
+        (r"\b(?:macos|mac\s*os|macbook|imac)\b", "macOS"),
+        (r"\blinux\b", "Linux"),
+    )
+
+    def add(value: str) -> None:
+        if value not in result:
+            result.append(value)
+
+    for raw in values:
+        value = raw.strip()
+        lowered = value.casefold()
+        evidence = f"{lowered} {context_lower}"
+
+        if "openvpn" in lowered:
+            add("OpenVPN")
+            for pattern, platform in (
+                (r"\b(?:ios|iphone|ipad)\b", "iOS"),
+                (r"\bandroid\b", "Android"),
+                (r"\bwindows(?:\s*(?:10|11))?\b", "Windows"),
+                (r"\b(?:macos|mac\s*os|macbook|imac)\b", "macOS"),
+                (r"\blinux\b", "Linux"),
+            ):
+                if re.search(pattern, lowered):
+                    add(platform)
+            continue
+
+        if (
+            "vpn наоборот" in lowered or "vpnnaoborot" in lowered or "naoborot app" in lowered
+            or (lowered == "приложение" and "vpn наоборот" in context_lower)
+        ):
+            add("Приложение VPN Наоборот")
+            continue
+
+        if re.search(r"\b(?:windows|win\s*10|win\s*11)\b", lowered):
+            add("Windows")
+            continue
+        if re.search(r"\b(?:macos|mac\s*os|macbook|imac)\b", lowered):
+            add("macOS")
+            continue
+        if re.search(r"\blinux\b", lowered):
+            add("Linux")
+            continue
+        if re.search(r"\b(?:ios|iphone|ipad)\b", lowered):
+            add("iOS")
+            continue
+        if re.search(r"\bandroid\b", lowered):
+            add("Android")
+            continue
+
+        if lowered in {"телефон", "phone", "mobile phone"}:
+            if re.search(r"\b(?:ios|iphone|ipad)\b", evidence):
+                add("iOS")
+            elif re.search(r"\bandroid\b", evidence):
+                add("Android")
+            continue
+
+        if lowered in {
+            "app store", "apple app store", "play store", "google play",
+            "египет", "egypt", "разные устройства", "несколько устройств",
+        }:
+            continue
+
+        is_extension = "расширен" in lowered or "extension" in lowered or lowered == "chrome"
+        if is_extension:
+            matched = False
+            if re.search(r"\b(?:яндекс|yandex)\b", evidence):
+                add("Расширение Яндекс")
+                matched = True
+            if re.search(r"\b(?:chrome|google chrome)\b", evidence):
+                add("Расширение Chrome")
+                matched = True
+            if not matched and (
+                re.search(r"\b(?:firefox|mozilla|edge|opera|safari|brave|vivaldi)\b", evidence)
+                or "другого браузера" in lowered or "другой браузер" in lowered
+            ):
+                add("Расширение другого браузера")
+                matched = True
+            if not matched:
+                add("Расширение браузера (браузер не указан)")
+            continue
+
+        if re.search(r"\b(?:компьютер|пк|ноутбук|laptop|desktop)\b", lowered):
+            detected_os = [platform for pattern, platform in desktop_os if re.search(pattern, full_evidence)]
+            if detected_os:
+                for platform in detected_os:
+                    add(platform)
+            else:
+                add("Компьютер (ОС не указана)")
+            continue
+
+        if lowered in {"приложение vpn наоборот", "vpn наоборот app"}:
+            add("Приложение VPN Наоборот")
+        else:
+            add(value)
+    return result
 
 
 def _remove_url(match: re.Match) -> str:
@@ -283,7 +445,7 @@ def _monitoring_prompt(week: dict, day: dict, combined: dict, week_bytes: int, d
   "dataset_fingerprint": "{combined['dataset_fingerprint']}",
   "categories": [{{"name": "...", "description": "..."}}],
   "classifications": [
-    {{"id": "...", "category": "...", "subcategory": "...", "problem_summary": "...", "severity": null, "severity_reason": "...", "confidence": "low", "evidence": "..."}}
+    {{"id": "...", "category": "...", "subcategory": "...", "additional_topics": [], "platforms": [], "problem_summary": "...", "severity": null, "severity_reason": "...", "confidence": "low", "evidence": "..."}}
   ],
   "executive_summary": "Общий краткий вывод по объединению",
   "recommendations": ["Общая рекомендация"],
@@ -466,6 +628,11 @@ def _validate_result(rows: list[dict[str, Any]], payload: dict[str, Any], result
     if not isinstance(raw_classifications, list):
         raise AnalysisError("В результате ChatGPT нет списка classifications")
     expected_ids = {str(row["id"]) for row in rows}
+    safe_conversations = {
+        str(conversation["id"]): conversation
+        for conversation in payload.get("conversations", [])
+        if isinstance(conversation, dict) and conversation.get("id") is not None
+    }
     classifications = []
     seen_ids: set[str] = set()
     required_text = ("category", "subcategory", "problem_summary", "severity_reason")
@@ -483,6 +650,14 @@ def _validate_result(rows: list[dict[str, Any]], payload: dict[str, Any], result
                 raise AnalysisError(f"У обращения {conversation_id} не заполнено поле {field}")
         if not isinstance(item.get("evidence"), str):
             raise AnalysisError(f"У обращения {conversation_id} поле evidence должно быть строкой")
+        platforms = item.get("platforms", [])
+        if not isinstance(platforms, list) or any(not isinstance(value, str) or not value.strip() for value in platforms):
+            raise AnalysisError(f"У обращения {conversation_id}: platforms должен быть списком непустых строк")
+        additional_topics = item.get("additional_topics", [])
+        if not isinstance(additional_topics, list) or any(
+            not isinstance(value, str) or not value.strip() for value in additional_topics
+        ):
+            raise AnalysisError(f"У обращения {conversation_id}: additional_topics должен быть списком непустых строк")
         if item["category"] not in category_names:
             raise AnalysisError(f"У обращения {conversation_id} неизвестная категория: {item['category']}")
         severity = item.get("severity")
@@ -491,15 +666,29 @@ def _validate_result(rows: list[dict[str, Any]], payload: dict[str, Any], result
         confidence = item.get("confidence")
         if not isinstance(confidence, str) or confidence not in _CONFIDENCE:
             raise AnalysisError(f"У обращения {conversation_id} неверное confidence: {confidence}")
+        safe_conversation = safe_conversations.get(conversation_id, {})
+        additional_topics = list(additional_topics)
+        if (
+            _normalize_problem_subcategory(item["subcategory"]) != DOCS_TARIFF_SUBCATEGORY
+            and DOCS_TARIFF_SUBCATEGORY not in additional_topics
+            and _docs_tariff_operator_evidence(safe_conversation)
+        ):
+            additional_topics.append(DOCS_TARIFF_SUBCATEGORY)
+        customer_context = " ".join(
+            message.get("text", "") for message in safe_conversation.get("messages", [])
+            if isinstance(message, dict) and message.get("role") == "customer"
+        )
         classifications.append({
             "id": conversation_id,
             "category": item["category"],
-            "subcategory": item["subcategory"].strip(),
+            "subcategory": _normalize_problem_subcategory(item["subcategory"]),
             "problem_summary": item["problem_summary"].strip(),
             "severity": severity,
             "severity_reason": item["severity_reason"].strip(),
             "confidence": confidence,
             "evidence": item["evidence"].strip(),
+            "platforms": _normalize_platforms(platforms, customer_context),
+            "additional_topics": list(dict.fromkeys(value.strip() for value in additional_topics)),
         })
     missing_ids = expected_ids - seen_ids
     if missing_ids:
@@ -552,6 +741,53 @@ def _markdown_report(rows: list[dict], categories: list[dict], classifications: 
         description = descriptions.get(name, "").replace("|", "\\|").replace("\n", " ")
         escaped_name = name.replace("|", "\\|")
         lines.append(f"| {rank} | {escaped_name} | {count} | {share:.1f}% | {description} |")
+    subcategory_counts = Counter(item["subcategory"] for item in classifications)
+    lines.extend([
+        "", "## Топ-10 подкатегорий: проблемы и запросы", "",
+        "| Место | Подкатегория | Обращений | Доля |", "|---:|---|---:|---:|",
+    ])
+    for rank, (name, count) in enumerate(
+        sorted(subcategory_counts.items(), key=lambda pair: (-pair[1], pair[0].casefold()))[:10], start=1
+    ):
+        escaped_name = name.replace("|", "\\|")
+        lines.append(f"| {rank} | {escaped_name} | {count} | {count / len(rows) * 100:.1f}% |")
+    platform_counts = Counter(
+        platform for item in classifications for platform in set(item.get("platforms", []))
+    )
+    lines.extend(["", "## Платформы", ""])
+    if platform_counts:
+        lines.extend(["| Платформа | Обращений |", "|---|---:|"])
+        lines.extend(
+            f"| {name} | {count} |"
+            for name, count in sorted(platform_counts.items(), key=lambda pair: (-pair[1], pair[0].casefold()))
+        )
+    else:
+        lines.append("Платформа не указана или не подтверждена в переписке.")
+    docs_tariff_cases = [
+        item for item in classifications
+        if item["subcategory"] == DOCS_TARIFF_SUBCATEGORY
+        or DOCS_TARIFF_SUBCATEGORY in item.get("additional_topics", [])
+    ]
+    lines.extend(["", "## Ограничение тарифа «Для документов»", ""])
+    lines.append(f"Подтверждено обращений: **{len(docs_tariff_cases)}**.")
+    lines.append("Считаются уникальные ID по всей сохранённой переписке, включая подтверждения оператора. Ограничение может быть основной или дополнительной темой; повторные сообщения не увеличивают количество обращений.")
+    if docs_tariff_cases:
+        lines.extend(["", "Примеры:", ""])
+        lines.extend(
+            f"- `{item['id']}` — {item['problem_summary']}"
+            for item in docs_tariff_cases[:5]
+        )
+    other_cases = [item for item in classifications if item["category"] == OTHER_CATEGORY]
+    lines.extend(["", "## Что входит в «Прочие обращения»", ""])
+    if other_cases:
+        lines.extend(["| Основание | Обращений |", "|---|---:|"])
+        for name, count in Counter(item["subcategory"] for item in other_cases).most_common():
+            escaped_name = name.replace("|", "\\|")
+            lines.append(f"| {escaped_name} | {count} |")
+        lines.extend(["", "Примеры оставшихся случаев:", ""])
+        lines.extend(f"- `{item['id']}` — {item['subcategory']}: {item['problem_summary']}" for item in other_cases[:5])
+    else:
+        lines.append("Обращений в категории «Прочие обращения» нет.")
     lines.extend(["", "## Тяжесть по текстовым признакам", "", "| Уровень | Обращений |", "|---|---:|"])
     for key, label in (("high", "Высокая"), ("medium", "Средняя"), ("low", "Низкая"), ("unknown", "Не оценена")):
         lines.append(f"| {label} | {severity_summary[key]} |")
@@ -590,7 +826,7 @@ def generate_report(input_path: str | Path, result_path: str | Path,
 
 def _write_classifications_csv(path: Path, classifications: list[dict], periods: dict[str, set[str]] | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fields = ("id", "category", "subcategory", "problem_summary", "severity",
+    fields = ("id", "category", "subcategory", "additional_topics", "platforms", "problem_summary", "severity",
               "severity_reason", "confidence", "evidence")
     if periods is not None:
         fields = (*fields, "periods")
@@ -603,6 +839,8 @@ def _write_classifications_csv(path: Path, classifications: list[dict], periods:
             writer.writeheader()
             for item in classifications:
                 row = dict(item)
+                row["additional_topics"] = ";".join(item.get("additional_topics", []))
+                row["platforms"] = ";".join(item.get("platforms", []))
                 if periods is not None:
                     conversation_id = item["id"]
                     row["periods"] = ";".join(
@@ -827,6 +1065,15 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _print_other_review_pending(label: str, result: dict) -> None:
+    print(
+        f"{label}: нужна повторная проверка {result['review_count']} обращений из «Прочих»; "
+        f"готовы результаты {result['review_ready']} из {result['review_workers']} проверяющих. "
+        f"Манифест: {result['review_manifest_path']}. "
+        "Запустите проверяющих с новым контекстом по agents_protocol.md из каталога проверки и повторите команду."
+    )
+
+
 def _maybe_notify_slack(args: argparse.Namespace, result: dict) -> None:
     """Автоотправка дашборда в Slack после merge-agents/research.
 
@@ -928,6 +1175,7 @@ def main(argv: list[str] | None = None) -> int:
             explicit_service = bool(getattr(args, "service", None))
             services = _services_for_args(args)
             service_results: dict[str, dict] = {}
+            pending_services: list[str] = []
             for service in services:
                 args.service = service.id
                 try:
@@ -962,6 +1210,10 @@ def main(argv: list[str] | None = None) -> int:
                     billing_category=get_billing_category(service.id),
                     service_id=service.id,
                 )
+                if result.get("review_required"):
+                    _print_other_review_pending(service.label, result)
+                    pending_services.append(service.id)
+                    continue
                 print(
                     f"{service.label}: слито {result['unique_conversation_count']} классификаций. "
                     f"Отчёт: {result['report_path']}. Дашборд: {result['dashboard_path']}"
@@ -969,6 +1221,8 @@ def main(argv: list[str] | None = None) -> int:
                 if "comparison_path" in result:
                     print(f"  Сравнение с предыдущим прогоном: {result['comparison_path']}")
                 service_results[service.id] = result
+            if pending_services:
+                return 3
             if len(service_results) > 1:
                 dashboards = {sid: Path(res["dashboard_path"]) for sid, res in service_results.items()}
                 combined_dashboard = _build_combined_dashboard(dashboards)
@@ -1044,6 +1298,10 @@ def main(argv: list[str] | None = None) -> int:
                     billing_category=get_billing_category(service.id),
                     service_id=service.id,
                 )
+                if result.get("review_required"):
+                    _print_other_review_pending(service.label, result)
+                    pending_services.append(service.id)
+                    continue
                 print(
                     f"{service.label}: слито {result['unique_conversation_count']} классификаций. "
                     f"Отчёт: {result['report_path']}. Дашборд: {result['dashboard_path']}"

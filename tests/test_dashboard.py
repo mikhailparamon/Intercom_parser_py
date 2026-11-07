@@ -1,13 +1,12 @@
 import json
 
-from intercom_exporter.agents_orchestration import FIXED_SUBCATEGORIES
 from intercom_exporter.dashboard import build_dashboard_data, render_dashboard_html, write_combined_dashboard, write_dashboard
 from intercom_exporter.support_analysis import _build_payload, generate_monitoring_report
 
 CATEGORIES = [
     {"name": "Подключение VPN", "description": "Проблемы с подключением"},
     {"name": "Оплата", "description": "Проблемы с оплатой"},
-    {"name": "Оплата и управление подпиской", "description": "Оплата и подписка"},
+    {"name": "Оплата и подписка", "description": "Оплата и подписка"},
 ]
 
 
@@ -78,11 +77,32 @@ def test_daily_series_covers_seven_days_ending_at_latest_created():
 
 def test_billing_week_counts_billing_category():
     data = build_dashboard_data(_week_rows(), _day_rows(), CATEGORIES, [
-        _classification("w1", "Оплата и управление подпиской", "Отмена подписки", None),
+        _classification("w1", "Оплата и подписка", "Отмена подписки", None),
         _classification("w2", "Оплата", "Карта отклонена", None),
-        _classification("d1", "Оплата и управление подпиской", "Возврат денег", None),
+        _classification("d1", "Оплата и подписка", "Возврат денег", None),
     ], "w", "d")
     assert data["kpis"]["billing_week"] == 2
+
+
+def test_docs_tariff_replaces_no_request_in_subcategory_ranking_without_separate_card():
+    rows = _week_rows()
+    classifications = [
+        _classification("w1", "Совместимость и ограничения", "Ограничение тарифа «Для документов»", None),
+        _classification("w2", "Прочие обращения", "Нет запроса", None),
+        _classification("d1", "Оплата и подписка", "Смена тарифа", None),
+    ]
+    classifications[2]["additional_topics"] = ["Ограничение тарифа «Для документов»"]
+
+    data = build_dashboard_data(rows, _day_rows(), CATEGORIES, classifications, "w", "d")
+    html = render_dashboard_html(data)
+
+    assert data["docs_tariff"]["week_count"] == 2
+    assert data["docs_tariff"]["day_count"] == 1
+    assert {item["name"]: item["count"] for item in data["subcategories"]} == {
+        'Тариф «Для документов»': 2, 'Смена тарифа': 1,
+    }
+    assert '<span>Тариф «Для документов»</span>' in html
+    assert '<h2>Ограничение тарифа «Для документов»</h2>' not in html
 
 
 def test_daily_series_empty_when_no_rows():
@@ -302,7 +322,7 @@ def test_high_cases_list_day_window_first():
     assert [case["id"] for case in data["high_cases"]] == ["d_new", "w_old"]
 
 
-def test_subcategories_always_include_fixed_six():
+def test_subcategories_are_not_forced_to_include_platforms():
     classifications = [
         _classification("w1", "Подключение VPN", "Не подключается", None),
     ]
@@ -310,9 +330,8 @@ def test_subcategories_always_include_fixed_six():
     data = build_dashboard_data(_week_rows(), _day_rows(), CATEGORIES, classifications, "w", "d")
 
     names = [item["name"] for item in data["subcategories"]]
-    for fixed in FIXED_SUBCATEGORIES:
-        assert fixed in names, f"{fixed!r} должен быть в топ-10 подкатегорий"
     assert {"name": "Не подключается", "count": 1} in data["subcategories"]
+    assert len(names) == 1
 
 
 def test_subcategories_fill_remaining_slots_with_free():
@@ -323,16 +342,14 @@ def test_subcategories_fill_remaining_slots_with_free():
         + [_classification(f"c{i}", "Оплата", "Карта отклонена", None) for i in range(5, 10)]
         + [_classification(f"c{i}", "Оплата", "Медленный возврат", None) for i in range(10, 15)]
         + [_classification(f"c{i}", "Оплата", "Сбой списания", None) for i in range(15, 20)]
-        + [_classification(f"c{i}", "Оплата", FIXED_SUBCATEGORIES[0], None) for i in range(20, 25)]
+        + [_classification(f"c{i}", "Оплата", "Возврат", None) for i in range(20, 25)]
         + [_classification(f"c{i}", "Оплата", "Редкая свободная", None) for i in range(25, 30)]
     )
 
     data = build_dashboard_data(rows, rows, CATEGORIES, classifications, "w", "d")
 
     names = [item["name"] for item in data["subcategories"]]
-    assert len(names) == 10
-    for fixed in FIXED_SUBCATEGORIES:
-        assert fixed in names
+    assert len(names) == 6
     assert "Карта отклонена" in names
     assert "Редкая свободная" in names
 
@@ -341,8 +358,8 @@ def test_subcategories_sorted_by_count_desc():
     rows = [{"id": f"c{i}", "created_at": "2026-10-26T09:00:00Z", "updated_at": "2026-10-26T10:00:00Z"}
             for i in range(4)]
     classifications = [
-        _classification("c0", "Подключение VPN", FIXED_SUBCATEGORIES[0], None),   # 1
-        _classification("c1", "Подключение VPN", FIXED_SUBCATEGORIES[-1], None),  # 1
+        _classification("c0", "Подключение VPN", "Возврат", None),   # 1
+        _classification("c1", "Подключение VPN", "Сброс соединения", None),  # 1
         _classification("c2", "Подключение VPN", "Популярная свободная", None),
         _classification("c3", "Подключение VPN", "Популярная свободная", None),
     ]
@@ -353,44 +370,43 @@ def test_subcategories_sorted_by_count_desc():
     assert counts == sorted(counts, reverse=True)
     names = [item["name"] for item in data["subcategories"]]
     assert "Популярная свободная" in names
-    for fixed in FIXED_SUBCATEGORIES:
-        assert fixed in names
-
-
-HYPERTUBE_FIXED_SUBCATS = ["Отмены", "Расширение Chrome", "Расширение Яндекс", "Расширение для др. браузеров",
-                           "TV/приставка", "Android-приложение", "Windows-приложение"]
-
-
-def test_subcategories_include_fixed_seven_when_passed():
+def test_platform_counts_are_separate_from_subcategory_ranking():
+    rows = _week_rows()
     classifications = [
-        _classification("w1", "Оплата и подписка", "Chrome", None),
+        {**_classification("w1", "Подключение VPN", "Код не приходит", None), "platforms": ["iOS", "Chrome"]},
+        {**_classification("w2", "Оплата", "Возврат", None), "platforms": ["TV/приставка"]},
+    ]
+    data = build_dashboard_data(rows, _day_rows(), CATEGORIES, classifications, "w", "d")
+    assert {item["name"] for item in data["subcategories"]} == {"Код не приходит", "Возврат"}
+    assert {item["name"] for item in data["platforms"]} == {"Расширение Chrome", "TV/приставка", "iOS"}
+
+
+def test_dashboard_omits_non_informative_platform_labels():
+    rows = _week_rows()
+    classifications = [
+        {**_classification("w1", "Оплата", "Вопрос", None),
+         "platforms": ["Телефон", "App Store", "Египет", "Разные устройства", "Linux", "Google TV",
+                       "Приложение VPN Наоборот", "Расширение другого браузера", "Роутер"]},
     ]
 
-    data = build_dashboard_data(_week_rows(), _day_rows(), CATEGORIES, classifications, "w", "d",
-                                fixed_subcategories=HYPERTUBE_FIXED_SUBCATS)
+    data = build_dashboard_data(rows, _day_rows(), CATEGORIES, classifications, "w", "d")
 
-    names = [item["name"] for item in data["subcategories"]]
-    for fixed in HYPERTUBE_FIXED_SUBCATS:
-        assert fixed in names
-    assert {"name": "Chrome", "count": 1} in data["subcategories"]
+    assert data["platforms"] == []
+    assert "Телефон" not in render_dashboard_html(data)
+    assert "App Store" not in render_dashboard_html(data)
+    assert "Египет" not in render_dashboard_html(data)
+    assert "Разные устройства" not in render_dashboard_html(data)
 
 
-def test_subcategories_sorted_by_count_desc_with_fixed():
-    rows = [{"id": f"c{i}", "created_at": "2026-10-26T09:00:00Z", "updated_at": "2026-10-26T10:00:00Z"}
-            for i in range(4)]
+def test_dashboard_limits_platforms_to_top_ten():
+    rows = [{"id": str(i), "created_at": "2026-11-01T00:00:00Z"} for i in range(11)]
     classifications = [
-        _classification("c0", "Оплата и подписка", "Chrome", None),
-        _classification("c1", "Оплата и подписка", "Chrome", None),
-        _classification("c2", "Оплата и подписка", "Отмены", None),
-        _classification("c3", "Оплата и подписка", "Свободная", None),
+        {**_classification(str(i), "Категория", "Проблема", None), "platforms": [f"Платформа {i}"]}
+        for i in range(11)
     ]
 
-    data = build_dashboard_data(rows, rows, CATEGORIES, classifications, "w", "d",
-                                fixed_subcategories=HYPERTUBE_FIXED_SUBCATS)
+    data = build_dashboard_data(rows, [], CATEGORIES, classifications, "w", "d")
 
-    counts = [item["count"] for item in data["subcategories"]]
-    assert counts == sorted(counts, reverse=True)
-    names = [item["name"] for item in data["subcategories"]]
-    assert names[0] == "Chrome"
-    assert "Отмены" in names
-    assert "Свободная" in names
+    assert len(data["platforms"]) == 10
+    assert [item["name"] for item in data["platforms"]] == [f"Платформа {i}" for i in range(10)]
+    assert "Платформы" in render_dashboard_html(data)

@@ -7,12 +7,39 @@ import pytest
 from intercom_exporter.support_analysis import (
     AnalysisError,
     _build_payload,
+    _normalize_platforms,
+    _docs_tariff_operator_evidence,
     find_latest_run,
     generate_report,
     main,
     prepare_analysis,
     sanitize_text,
 )
+
+
+@pytest.mark.parametrize(
+    "values, expected",
+    [
+        (["OpenVPN Connect", "OpenVPN"], ["OpenVPN"]),
+        (["OpenVPN на iOS"], ["OpenVPN", "iOS"]),
+        (["Компьютер", "Windows 11", "Mac OS"], ["Windows", "macOS"]),
+        (["Расширение браузера", "Расширение Яндекс", "Chrome"],
+         ["Расширение браузера (браузер не указан)", "Расширение Яндекс", "Расширение Chrome"]),
+        (["Расширение Firefox"], ["Расширение другого браузера"]),
+        (["VPN Наоборот", "Приложение VPN Наоборот"], ["Приложение VPN Наоборот"]),
+        (["Компьютер", "Неизвестный клиент"], ["Компьютер (ОС не указана)", "Неизвестный клиент"]),
+        (["Телефон", "App Store", "Египет", "Разные устройства"], []),
+    ],
+)
+def test_normalize_platforms_groups_synonyms_without_inventing_details(values, expected):
+    assert _normalize_platforms(values) == expected
+
+
+def test_normalize_platforms_uses_customer_context_to_resolve_generic_platforms():
+    assert _normalize_platforms(["Компьютер"], "Я пользуюсь Windows 11") == ["Windows"]
+    assert _normalize_platforms(["Расширение браузера"], "Установлено в Яндекс Браузере") == ["Расширение Яндекс"]
+    assert _normalize_platforms(["Приложение"], "Приложение VPN Наоборот не запускается") == ["Приложение VPN Наоборот"]
+    assert _normalize_platforms(["Телефон"], "Не работает на iPhone") == ["iOS"]
 
 
 def write_jsonl(path, rows):
@@ -118,7 +145,15 @@ def test_prepare_creates_chatgpt_input_prompt_and_keeps_real_ids(tmp_path):
     assert "как безопасно уменьшать долю неклассифицируемых" in prompt.lower()
     assert "предыдущая разметка" in prompt.lower()
     assert "сопоставь её с новым входом **по id**" in prompt.lower()
-    assert "оплата и управление подпиской" in prompt.lower()
+    assert "оплата и подписка" in prompt.lower()
+    assert "оплата не прошла или не распознана" in prompt.lower()
+    assert "продление или изменение подписки" in prompt.lower()
+    assert "ограничение тарифа «для документов»" in prompt.lower()
+    assert "сайт или сервис недоступен" in prompt.lower()
+    assert "не используй подкатегорию «оплата или подписка»" in prompt.lower()
+    assert "openvpn connect" in prompt.lower()
+    assert "расширение другого браузера" in prompt.lower()
+    assert "приложение vpn наоборот" in prompt.lower()
     assert "не оптимизируй процент за счёт догадок" in prompt.lower()
     assert "processed_count" in prompt
     assert "содержательного клиентского текста нет" in prompt.lower()
@@ -202,6 +237,8 @@ def test_report_counts_unique_conversations_and_writes_csv_and_markdown(tmp_path
     assert report["category_counts"] == {"Подключение VPN": 1, "Оплата": 1}
     assert report["severity_counts"] == {"high": 1, "medium": 1, "low": 0, "unknown": 0}
     assert len(csv_rows) == 2
+    assert "platforms" in csv_rows[0]
+    assert csv_rows[0]["platforms"] == ""
     assert "Частота проблем" in markdown
     assert "Тяжесть по текстовым признакам" in markdown
     assert "Проверить причины сбоев подключения." in markdown
@@ -217,6 +254,101 @@ def test_report_accepts_empty_evidence_when_customer_text_is_missing(tmp_path):
     result_path.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
 
     assert generate_report(input_path, result_path)["conversation_count"] == 2
+
+
+def test_report_writes_platforms_and_additional_topics_to_json_csv_and_report(tmp_path):
+    input_path = tmp_path / "conversations.jsonl"
+    write_jsonl(input_path, sample_conversations())
+    prepared = prepare_analysis(input_path)
+    result = valid_result(prepared["dataset_fingerprint"])
+    result["classifications"][0]["subcategory"] = "Отмены"
+    result["classifications"][0]["platforms"] = ["iOS", "Chrome"]
+    result["classifications"][0]["additional_topics"] = ["Низкая скорость"]
+    result_path = tmp_path / "result.json"
+    result_path.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+
+    generate_report(input_path, result_path)
+
+    output_dir = tmp_path / "support-analysis"
+    normalized = json.loads(result_path.read_text(encoding="utf-8"))
+    assert normalized["classifications"][0]["platforms"] == ["iOS", "Chrome"]
+    assert normalized["classifications"][0]["additional_topics"] == ["Низкая скорость"]
+    with (output_dir / "classifications.csv").open(encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert rows[0]["platforms"] == "iOS;Расширение Chrome"
+    assert rows[1]["platforms"] == ""
+    assert rows[0]["subcategory"] == "Отмена подписки"
+    assert rows[0]["additional_topics"] == "Низкая скорость"
+    markdown = (output_dir / "report.md").read_text(encoding="utf-8")
+    assert "Платформы" in markdown
+    assert "Топ-10 подкатегорий: проблемы и запросы" in markdown
+    assert "Отмена подписки" in markdown
+    assert "iOS" in markdown and "Chrome" in markdown
+
+
+def test_report_tracks_docs_tariff_in_primary_and_additional_topics(tmp_path):
+    input_path = tmp_path / "conversations.jsonl"
+    write_jsonl(input_path, sample_conversations())
+    prepared = prepare_analysis(input_path)
+    result = valid_result(prepared["dataset_fingerprint"])
+    result["classifications"][0]["subcategory"] = "Ограничение тарифа «Для документов»"
+    result["classifications"][1]["additional_topics"] = ["Ограничение тарифа «Для документов»"]
+    result_path = tmp_path / "result.json"
+    result_path.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+
+    generate_report(input_path, result_path)
+
+    markdown = (tmp_path / "support-analysis" / "report.md").read_text(encoding="utf-8")
+    assert "## Ограничение тарифа «Для документов»" in markdown
+    assert "Подтверждено обращений: **2**." in markdown
+
+
+@pytest.mark.parametrize("text, expected", [
+    ('Доступ к приложению не предусмотрен тарифом «Для документов». OpenVPN доступен.', True),
+    ('Наше приложение VPN Naoborot работает только на тарифах "Для Видео" и "Персональный". У Вас тариф "Для Документов".', True),
+    ('Вы купили подписку "Для документов". На этом тарифе подключение через наше приложение не предусмотрено.', True),
+    ('Вы оформили подписку "Для документов". Чтобы работало наше приложение на iPhone нужна подписка минимум "Для Видео".', True),
+    ('На тарифе "Для документов" скорость 1 Мбит/с.', False),
+    ('У вас тариф "Для документов". Подключитесь через приложение OpenVPN.', False),
+    ('Вашу подписку "Для документов" отменили. Возврат запросили.', False),
+])
+def test_docs_tariff_detection_uses_explicit_operator_restriction(text, expected):
+    conversation = {"messages": [{"role": "operator", "text": text}]}
+    assert bool(_docs_tariff_operator_evidence(conversation)) is expected
+    assert not _docs_tariff_operator_evidence({"messages": [{"role": "customer", "text": text}]})
+
+
+def test_report_adds_operator_confirmed_tariff_topic_and_counts_conversation_once(tmp_path):
+    rows = sample_conversations()
+    message = {"author": {"type": "admin"}, "body": 'Доступ к приложению не предусмотрен тарифом «Для документов».'}
+    rows[0]["conversation_parts"] = [message, dict(message)]
+    input_path = tmp_path / "conversations.jsonl"
+    write_jsonl(input_path, rows)
+    prepared = prepare_analysis(input_path)
+    result = valid_result(prepared["dataset_fingerprint"])
+    result_path = tmp_path / "result.json"
+    result_path.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+
+    generate_report(input_path, result_path)
+
+    with (tmp_path / "support-analysis/classifications.csv").open(encoding="utf-8-sig", newline="") as handle:
+        classified = list(csv.DictReader(handle))
+    assert classified[0]["subcategory"] == result["classifications"][0]["subcategory"]
+    assert classified[0]["additional_topics"] == 'Ограничение тарифа «Для документов»'
+    assert "Подтверждено обращений: **1**." in (tmp_path / "support-analysis/report.md").read_text(encoding="utf-8")
+
+
+def test_report_rejects_non_list_platforms(tmp_path):
+    input_path = tmp_path / "conversations.jsonl"
+    write_jsonl(input_path, sample_conversations())
+    prepared = prepare_analysis(input_path)
+    result = valid_result(prepared["dataset_fingerprint"])
+    result["classifications"][0]["platforms"] = "iOS"
+    result_path = tmp_path / "result.json"
+    result_path.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(AnalysisError, match="platforms должен быть списком"):
+        generate_report(input_path, result_path)
 
 
 @pytest.mark.parametrize(
