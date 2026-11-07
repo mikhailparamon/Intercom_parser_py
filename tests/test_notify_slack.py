@@ -68,15 +68,13 @@ def _summary_data():
     }
 
 
-def test_build_slack_summary_formats_day_and_week_stats():
+def test_build_slack_summary_formats_day_stats():
     text = build_slack_summary(_summary_data())
 
     assert text.splitlines() == [
         "За сутки: 111 обращений всего (Новых за 03.11: 50 шт., -50.0% к 02.11). "
         "Топ-1 категория за сутки: Проблемы подключения VPN — 35 (31.5%). "
         "Критичных обращений за сутки: 0",
-        "За неделю: 887 обращений всего. "
-        "Топ-1 категория за неделю: Проблемы подключения VPN — 337 (38.0%)",
     ]
 
 
@@ -135,7 +133,8 @@ def test_send_dashboard_uploads_file_with_summary(tmp_path):
     assert kwargs["json"]["files"] == [{"id": "F123", "title": "dashboard.html"}]
     comment = kwargs["json"]["initial_comment"]
     assert "За сутки: 111 обращений всего" in comment
-    assert "За неделю: 887 обращений всего" in comment
+    assert "Критичных обращений за сутки" in comment
+    assert "За неделю" not in comment
 
 
 def test_send_dashboard_without_data_json_sends_empty_comment(tmp_path):

@@ -77,8 +77,6 @@ def _service_summary_block(service_id: str, data: dict) -> str:
         label,
         f"{day_line}. {_top_category_text('Топ-1 категория за сутки', data.get('day_categories') or [])}"
         f". Критичных обращений за сутки: {day_high}",
-        f"За неделю: {_plural_conversations(kpis.get('week_total', 0))} всего. "
-        f"{_top_category_text('Топ-1 категория за неделю', data.get('week_categories') or [])}",
     ])
 
 
@@ -98,8 +96,6 @@ def build_slack_summary(data: dict) -> str:
         return "\n".join([
             f"{day_line}. {_top_category_text('Топ-1 категория за сутки', data.get('day_categories') or [])}"
             f". Критичных обращений за сутки: {day_high}",
-            f"За неделю: {_plural_conversations(kpis.get('week_total', 0))} всего. "
-            f"{_top_category_text('Топ-1 категория за неделю', data.get('week_categories') or [])}",
         ])
     blocks = []
     for sid in SERVICES:
